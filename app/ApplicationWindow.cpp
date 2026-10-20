@@ -10,6 +10,7 @@
 namespace elka::apps {
 namespace {
 constexpr COLORREF Back = RGB(23, 21, 24), Field = RGB(33, 30, 33), Ink = RGB(242, 235, 229), Muted = RGB(185, 173, 167), Amber = RGB(239, 168, 97);
+constexpr COLORREF Warning = RGB(255, 135, 135);
 enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, AppLabel, Refresh, RestoreHidden, AddApp, Rows,
     Learn, Mode, Remove, ToleranceLabel, ToleranceList, Confirm, Start, Stop, Rearm, Save, Close, Status, SelectionHint, ResetAudio };
 const wchar_t* ActionName(Action action) {
@@ -27,6 +28,8 @@ std::wstring Db(double scalar) {
     std::wostringstream out; out << std::fixed << std::setprecision(1) << 20 * std::log10(scalar) << L" dB"; return out.str();
 }
 std::wstring State(const Row& row, const View& view) {
+    const auto unavailable = UnavailableNotice(row, view.edition, view.endpoints, view.sessions);
+    if (!unavailable.empty()) return unavailable;
     if (row.mapping.id == view.learning) return L"Move control...";
     if (!row.mapping.use) return L"Disabled";
     if (!row.mapping.source.Valid()) return L"Not learned";
@@ -118,7 +121,7 @@ void Window::Layout() {
     int tabX = 24;
     for (int i = 0; i < InputCount; ++i) {
         move(Vaio + i, tabX, 94, 90, 32);
-        if (RouteAvailable(i, view.edition)) tabX += 98;
+        if (VisibleRoute(view.rows, i, view.edition)) tabX += 98;
     }
     move(ResetAudio, right - 148, 94, 148, 32);
     move(Refresh, right - 308, 94, 148, 32);
@@ -144,28 +147,34 @@ uint64_t Window::Selected() const {
 }
 void Window::Render() {
     if (!window) return;
-    rendering = true; const int previousEdition = view.edition; view = controller.Snapshot();
-    if (!RouteAvailable(route, view.edition)) route = 0;
+    rendering = true; view = controller.Snapshot();
+    if (!VisibleRoute(view.rows, route, view.edition)) route = 0;
+    bool pagesChanged{};
     for (int i = 0; i < InputCount; ++i) {
         const bool available = RouteAvailable(i, view.edition);
+        const bool shown = VisibleRoute(view.rows, i, view.edition);
         const bool detected = std::any_of(view.endpoints.begin(), view.endpoints.end(), [&](const Endpoint& e) { return e.route == i; });
-        if ((IsWindowVisible(Control(Vaio + i)) != FALSE) != available) ShowWindow(Control(Vaio + i), available ? SW_SHOW : SW_HIDE);
-        if ((IsWindowEnabled(Control(Vaio + i)) != FALSE) != (available && detected)) EnableWindow(Control(Vaio + i), available && detected);
+        const bool saved = std::any_of(view.rows.begin(), view.rows.end(), [&](const Row& r) { return VisibleRow(r, i); });
+        if (((GetWindowLongPtrW(Control(Vaio + i), GWL_STYLE) & WS_VISIBLE) != 0) != shown) {
+            ShowWindow(Control(Vaio + i), shown ? SW_SHOW : SW_HIDE); pagesChanged = true;
+        }
+        const bool enabled = saved || (available && detected);
+        if ((IsWindowEnabled(Control(Vaio + i)) != FALSE) != enabled) EnableWindow(Control(Vaio + i), enabled);
     }
-    if (view.edition != previousEdition) Layout();
+    if (pagesChanged) Layout();
     Set(Control(Subtitle), view.active ? L"PREVIEW RUNNING  /  Individual application volume and mute" : L"PREVIEW STOPPED  /  Strip and bus pickup continues independently");
     const auto oldSelection = Selected();
     const int topIndex = ListView_GetTopIndex(Control(Rows));
     const auto topId = topIndex >= 0 && topIndex < static_cast<int>(visible.size()) ? visible[topIndex] : 0;
     std::vector<uint64_t> next;
-    for (const auto& r : view.rows) if (RouteAvailable(route, view.edition) && r.mapping.route == route && !r.mapping.hidden && !r.target.instances.empty()) next.push_back(r.mapping.id);
+    for (const auto& r : view.rows) if (VisibleRow(r, route)) next.push_back(r.mapping.id);
     const auto hidden = std::count_if(view.rows.begin(), view.rows.end(), [&](const Row& r) { return r.mapping.route == route && r.mapping.hidden; });
-    Set(Control(RestoreHidden), L"Restore removed (" + std::to_wstring(hidden) + L")");
-    EnableWindow(Control(RestoreHidden), hidden != 0 && RouteAvailable(route, view.edition));
-    Set(Control(AppLabel), view.edition == 0 ? L"Connect VoiceMeeter in the main window to detect its inputs." : next.empty() ?
-        std::wstring(RouteName(route)) + (hidden ? L" — No visible application rows. Use Restore removed, or start playback on this input." :
+    Set(Control(RestoreHidden), L"Show removed (" + std::to_wstring(hidden) + L")");
+    EnableWindow(Control(RestoreHidden), hidden != 0);
+    Set(Control(AppLabel), next.empty() ?
+        std::wstring(RouteName(route)) + (hidden ? L" — No visible application rows. Show removed redisplays apps without restoring their deleted MIDI assignments." :
             L" — No applications connected. Start playback on this input; the list updates automatically.") :
-        std::wstring(RouteName(route)) + L" — Tick Use for the apps you want to control, then select a row and Learn. All input pages run together.");
+        std::wstring(RouteName(route)) + L" — Offline assignments stay here in red. Delete row saves removal and frees its MIDI control.");
     if (next != visible) {
         uint64_t selection = oldSelection;
         if (std::find(next.begin(), next.end(), oldSelection) == next.end()) selection = next.empty() ? 0 : next.front();
@@ -196,6 +205,9 @@ void Window::Render() {
     }
     const auto selected = Selected(); const auto row = std::find_if(view.rows.begin(), view.rows.end(), [&](const Row& r) { return r.mapping.id == selected; });
     for (auto id : {Learn, Mode, Remove, AddApp}) if ((IsWindowEnabled(Control(id)) != FALSE) != (selected != 0)) EnableWindow(Control(id), selected != 0);
+    const bool ready = row != view.rows.end() && row->target.ready && RouteAvailable(row->mapping.route, view.edition);
+    EnableWindow(Control(Learn), ready && view.connected);
+    EnableWindow(Control(AddApp), ready);
     if (row != view.rows.end()) {
         if (!SendMessageW(Control(Mode), CB_GETDROPPEDSTATE, 0, 0)) SendMessageW(Control(Mode), CB_SETCURSEL, static_cast<int>(row->mapping.action), 0);
         const auto endpoint = std::find_if(view.endpoints.begin(), view.endpoints.end(), [&](const Endpoint& e) { return e.id == row->mapping.endpoint; });
@@ -237,7 +249,7 @@ void Window::Command(int id, int code) {
         case Refresh: command.operation = Operation::Refresh; break;
         case RestoreHidden: command.operation = Operation::RestoreHidden; command.route = route; break;
         case Learn: command.operation = Operation::Learn; break;
-        case Remove: command.operation = Operation::Hide; break;
+        case Remove: command.operation = Operation::Remove; break;
         case Start: command.operation = Operation::Start; break;
         case Stop: command.operation = Operation::Stop; break;
         case Rearm: command.operation = Operation::Rearm; break;
@@ -253,8 +265,8 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
     case WM_CREATE: {
         Add(L"STATIC", L"Application MIDI Control", SS_LEFT, Title); Add(L"STATIC", L"PREVIEW", SS_LEFT, Subtitle);
         for (int i = 0; i < InputCount; ++i) Add(L"BUTTON", RouteName(i), BS_OWNERDRAW | WS_TABSTOP, Vaio + i);
-        for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {RestoreHidden, L"Restore removed (0)"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
-            {Remove, L"Remove row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}, {ResetAudio, L"Reset audio"}})
+        for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {RestoreHidden, L"Show removed (0)"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
+            {Remove, L"Delete row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}, {ResetAudio, L"Reset audio"}})
             Add(L"BUTTON", name, BS_OWNERDRAW | WS_TABSTOP, id);
         Add(L"STATIC", L"Connected apps appear automatically. Tick Use, select a row, then Learn.", SS_LEFT, AppLabel);
         Add(L"STATIC", L"Tolerance", SS_LEFT, ToleranceLabel); Add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, SelectionHint); Add(L"STATIC", L"", SS_LEFT, Status);
@@ -288,7 +300,16 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
             if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
                 const bool selected = (ListView_GetItemState(Control(Rows), static_cast<int>(draw->nmcd.dwItemSpec), LVIS_SELECTED) & LVIS_SELECTED) != 0;
                 draw->clrText = Ink; draw->clrTextBk = selected ? RGB(75, 53, 39) : Field;
-                draw->nmcd.uItemState &= ~CDIS_SELECTED; return CDRF_NEWFONT;
+                draw->nmcd.uItemState &= ~CDIS_SELECTED; return CDRF_NOTIFYSUBITEMDRAW;
+            }
+            if (draw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+                draw->clrText = Ink;
+                const auto index = static_cast<size_t>(draw->nmcd.dwItemSpec);
+                if (draw->iSubItem == 6 && index < visible.size()) {
+                    const auto row = std::find_if(view.rows.begin(), view.rows.end(), [&](const Row& r) { return r.mapping.id == visible[index]; });
+                    if (row != view.rows.end() && !UnavailableNotice(*row, view.edition, view.endpoints, view.sessions).empty()) draw->clrText = Warning;
+                }
+                return CDRF_NEWFONT;
             }
         }
         if (header->idFrom == Rows && header->code == LVN_ITEMCHANGED && !rendering) {
@@ -326,13 +347,12 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
         }
         const auto id = Selected(); if (!id) return 0;
         const auto menu = CreatePopupMenu(); if (!menu) return 0;
-        AppendMenuW(menu, MF_STRING, 1, L"Remove row from Elka");
-        AppendMenuW(menu, MF_STRING, 2, L"Clear MIDI assignment");
+        AppendMenuW(menu, MF_STRING, 1, L"Delete row and saved MIDI assignment");
         // Keep the clicked identity even if discovery refreshes while the menu is open.
         const auto choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, window, nullptr);
         DestroyMenu(menu);
         if (choice) {
-            apps::Command command{choice == 1 ? Operation::Hide : Operation::Remove};
+            apps::Command command{Operation::Remove};
             command.row = id; controller.Send(std::move(command));
         }
         return 0;

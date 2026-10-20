@@ -13,6 +13,11 @@ struct Setup {
     std::vector<Mapping> mappings;
     int tolerance{3};
 };
+inline Setup ApplicationSetup(const std::array<std::wstring, RouteCount>& endpoints, int tolerance, const std::vector<Row>& rows) {
+    Setup result; result.endpoints = endpoints; result.tolerance = tolerance;
+    for (const auto& row : rows) if (Configured(row.mapping) && !row.mapping.hidden) result.mappings.push_back(row.mapping);
+    return result;
+}
 inline bool SaveApplicationSetup(const std::filesystem::path& path, const Setup& setup) {
     std::wostringstream out;
     out << L"ElkaApplicationMidi 3\n" << setup.tolerance << L'\n';
@@ -50,7 +55,11 @@ inline bool LoadApplicationSetup(const std::filesystem::path& path, Setup& setup
             m.endpoint.size() > 32768 || m.appKey.size() > 32768 || m.name.size() > 1024) return false;
         if (!m.source.Valid() && m.source != Source{}) return false;
         if (m.source.kind == 1 && action != static_cast<int>(Action::Mute)) return false;
-        m.id = i + 1; m.hidden = hidden != 0; m.use = use != 0 && !m.hidden; m.action = static_cast<Action>(action); next.mappings.push_back(std::move(m));
+        m.id = i + 1; m.hidden = hidden != 0; m.use = use != 0 && !m.hidden; m.action = static_cast<Action>(action);
+        // Older versions hid learned rows without deleting their sources.
+        // Expose those disabled bindings so the user can find and delete them.
+        if (m.hidden && m.source.Valid()) m.hidden = false;
+        next.mappings.push_back(std::move(m));
     }
     in >> std::ws; if (!in.eof()) return false;
     setup = std::move(next); return true;

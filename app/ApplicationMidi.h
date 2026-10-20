@@ -131,14 +131,36 @@ inline bool SameTarget(const Mapping& a, const Mapping& b) {
     return a.endpoint == b.endpoint && a.appKey == b.appKey && (a.action == Action::Mute) == (b.action == Action::Mute);
 }
 inline bool Configured(const Mapping& m) { return m.hidden || m.use || m.source.Valid() || m.action != Action::Volume; }
+inline bool VisibleRow(const Row& row, int route) {
+    return row.mapping.route == route && !row.mapping.hidden && (Configured(row.mapping) || !row.target.instances.empty());
+}
+inline bool VisibleRoute(const std::vector<Row>& rows, int route, int edition) {
+    return route >= 0 && route < InputCount && (RouteAvailable(route, edition) ||
+        std::any_of(rows.begin(), rows.end(), [&](const Row& row) { return VisibleRow(row, route); }));
+}
+inline std::wstring UnavailableNotice(const Row& row, int edition, const std::vector<Endpoint>& endpoints, const std::vector<Session>& sessions) {
+    if (!RouteAvailable(row.mapping.route, edition)) return L"Input unavailable";
+    if (std::none_of(endpoints.begin(), endpoints.end(), [&](const Endpoint& e) { return e.id == row.mapping.endpoint; })) return L"Input offline";
+    if (row.target.ready) return {};
+    if (!row.target.instances.empty()) return L"Session unavailable";
+    std::set<int> elsewhere;
+    for (const auto& s : sessions) if (s.appKey == row.mapping.appKey && s.endpoint != row.mapping.endpoint) {
+        const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [&](const Endpoint& e) { return e.id == s.endpoint; });
+        if (endpoint != endpoints.end()) elsewhere.insert(endpoint->route);
+    }
+    if (elsewhere.size() == 1) return L"Offline / on " + std::wstring(RouteName(*elsewhere.begin()));
+    return elsewhere.empty() ? L"App offline" : L"On other inputs";
+}
 inline void HideRow(Row& row) {
-    row.mapping.hidden = true; row.mapping.use = false; row.Reset();
+    // Suppress rediscovery for this run only. No MIDI binding survives deletion.
+    row.mapping.hidden = true; row.mapping.use = false;
+    row.mapping.source = {}; row.mapping.action = Action::Volume; row.Reset();
 }
 inline void RestoreRow(Row& row) {
     row.mapping.hidden = false; row.mapping.use = false; row.Reset();
 }
 // Reconcile by endpoint + executable, never by row order. Configured offline
-// rows remain in the model/profile; the window shows only present sessions.
+// rows remain visible on their saved input, even without a present session.
 inline void SyncApplications(std::vector<Row>& rows, const std::vector<Endpoint>& endpoints, const std::vector<Session>& sessions, int edition, uint64_t& nextId) {
     std::erase_if(rows, [&](const Row& r) {
         return !Configured(r.mapping) && std::none_of(sessions.begin(), sessions.end(), [&](const Session& s) { return s.endpoint == r.mapping.endpoint && s.appKey == r.mapping.appKey; });

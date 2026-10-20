@@ -111,7 +111,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 Row* row = found == state.rows.end() ? nullptr : &*found;
                 if (row && !Configured(row->mapping) &&
                     (command.operation == Operation::Learn || command.operation == Operation::Mode || command.operation == Operation::Hide || (command.operation == Operation::Use && command.value)) &&
-                    std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping); }) >= 128) {
+                    std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping) && !r.mapping.hidden; }) >= 128) {
                     state.notice = L"Save up to 128 application controls. Clear an unused assignment first."; continue;
                 }
                 switch (command.operation) {
@@ -124,40 +124,44 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 case Operation::Add: {
                     const int route = row ? row->mapping.route : command.route;
                     if (!RouteAvailable(route, state.edition)) break;
-                    if (std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping); }) >= 128) { state.notice = L"Save up to 128 application controls."; break; }
+                    if (std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping) && !r.mapping.hidden; }) >= 128) { state.notice = L"Save up to 128 application controls."; break; }
                     const auto endpoint = row ? row->mapping.endpoint : state.selected[route];
                     const auto key = row ? row->mapping.appKey : command.key;
                     const auto app = std::find_if(state.sessions.begin(), state.sessions.end(), [&](const Session& s) { return s.endpoint == endpoint && s.appKey == key; });
                     if (app == state.sessions.end()) { state.notice = L"That application is no longer connected. Start playback and refresh the list."; break; }
                     Row added; added.mapping = {nextId++, route, endpoint, app->appKey, app->name, {}, Action::Volume, false};
-                    if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) {
+                    if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return !r.mapping.hidden && SameTarget(r.mapping, added.mapping); })) {
                         // Allow a second row for a separate mute button.
                         added.mapping.action = Action::Mute;
-                        if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) { state.notice = L"This app already has volume and mute rows."; break; }
+                        if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return !r.mapping.hidden && SameTarget(r.mapping, added.mapping); })) { state.notice = L"This app already has volume and mute rows."; break; }
                     }
                     halt(); state.rows.push_back(std::move(added)); state.confirmed = false; state.dirty = true;
                     state.notice = L"Extra control added. Tick Use, select its row, then Learn."; break;
                 }
                 case Operation::Remove:
-                    if (row) { halt(); state.rows.erase(found); state.dirty = true; } break;
                 case Operation::Hide:
                     if (row) {
-                        HideRow(*row); if (state.learning == row->mapping.id) state.learning = 0;
-                        state.dirty = true;
-                        state.notice = L"Row removed from Elka and its MIDI control disabled. Save applications to remember; Restore removed brings it back. VoiceMeeter's list is unchanged.";
+                        auto next = state.rows;
+                        HideRow(next[static_cast<size_t>(found - state.rows.begin())]);
+                        if (!SaveApplicationSetup(path, ApplicationSetup(state.selected, state.tolerance, next))) {
+                            state.notice = L"Could not save deletion. The row and its MIDI assignment are unchanged. Check folder access and try Delete row again.";
+                            break;
+                        }
+                        if (state.learning == command.row) state.learning = 0;
+                        state.rows = std::move(next); state.dirty = false;
+                        state.notice = L"Row deleted and application setup saved. Its MIDI control is free. Show removed can redisplay the app without restoring its assignment.";
                     } break;
                 case Operation::RestoreHidden:
-                    if (RouteAvailable(command.route, state.edition)) {
+                    if (command.route >= 0 && command.route < InputCount) {
                         for (auto& r : state.rows) if (r.mapping.route == command.route && r.mapping.hidden) RestoreRow(r);
-                        state.dirty = true;
-                        state.notice = L"Removed rows restored on this input. Tick Use to enable them again, then Save applications.";
+                        state.notice = L"Removed apps shown again without MIDI assignments. Tick Use and Learn to assign a new control.";
                     } break;
                 case Operation::Learn:
-                    if (row && !row->mapping.hidden && state.connected) {
+                    if (row && !row->mapping.hidden && row->target.ready && RouteAvailable(row->mapping.route, state.edition) && state.connected) {
                         const bool cancel = state.learning == command.row; halt();
                         state.learning = cancel ? 0 : command.row;
                         state.notice = cancel ? L"Learn cancelled." : L"Move one control. CC learns a fader/knob; a note learns a mute button. No application writes during Learn.";
-                    } else state.notice = L"Connect MIDI and VoiceMeeter before learning.";
+                    } else state.notice = L"Connect MIDI, VoiceMeeter and the application on this input before learning.";
                     break;
                 case Operation::Use:
                     if (row && !row->mapping.hidden) {
@@ -188,10 +192,9 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 case Operation::Refresh:
                     reset(); audio.Refresh(); state.endpoints = audio.Endpoints(); state.sessions = audio.Read(); discoverAt = 0;
                     SyncApplications(state.rows, state.endpoints, state.sessions, state.edition, nextId);
-                    state.notice = L"Application list refreshed. Closed apps are hidden; saved assignments return with them. Faders re-armed."; break;
+                    state.notice = L"Application list refreshed. Offline assignments stay on their saved input in red. Delete row frees their MIDI control. Faders re-armed."; break;
                 case Operation::Save: {
-                    Setup setup; setup.endpoints = state.selected; setup.tolerance = state.tolerance;
-                    for (const auto& r : state.rows) if (Configured(r.mapping)) setup.mappings.push_back(r.mapping);
+                    const auto setup = ApplicationSetup(state.selected, state.tolerance, state.rows);
                     if (SaveApplicationSetup(path, setup)) { state.dirty = false; state.notice = L"Application setup saved separately. This preview always starts stopped."; }
                     else state.notice = L"Could not save application setup beside the executable.";
                     break;

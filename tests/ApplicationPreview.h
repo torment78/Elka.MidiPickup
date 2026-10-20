@@ -14,6 +14,11 @@ int ApplicationPreview() {
             for (const auto& s : sessions) if (s.endpoint == endpoint.id && seen.insert(s.appKey).second)
                 setup.mappings.push_back({setup.mappings.size() + 1, endpoint.route, endpoint.id, s.appKey, s.name, {}, Action::Volume, false});
         }
+        // Inspection-only fixture: a saved binding whose app no longer has a
+        // session. Never opens MIDI or writes another application's audio.
+        if (!setup.endpoints[0].empty())
+            setup.mappings.push_back({setup.mappings.size() + 1, 0, setup.endpoints[0], L"elka-inspection-offline.exe",
+                L"Offline example (inspection only)", {0, 15, 119}, Action::Volume, true});
         SaveApplicationSetup(path, setup);
     }
     {

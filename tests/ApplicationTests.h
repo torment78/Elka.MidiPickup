@@ -91,6 +91,14 @@ void ApplicationTests() {
     const auto firstId = automatic[0].mapping.id; automatic[0].mapping.source = {0, 2, 91}; automatic[0].mapping.use = true;
     SyncApplications(automatic, endpoints, {}, 3, nextId);
     Check(automatic.size() == 1 && automatic[0].mapping.id == firstId, "closed apps discard discovery rows but retain learned assignments");
+    Check(VisibleRow(automatic[0], 2) && !VisibleRow(automatic[0], 1), "offline MIDI remains visible only on its saved input");
+    Check(VisibleRoute(automatic, 2, 1) && VisibleRoute(automatic, 2, 0) && !VisibleRoute({}, 2, 1), "saved input page remains accessible after edition or connection changes");
+    Check(UnavailableNotice(automatic[0], 3, endpoints, {}) == L"App offline", "missing application has explicit offline notice");
+    Check(UnavailableNotice(automatic[0], 3, endpoints, {b}) == L"Offline / on AUX", "moved app identifies other input without moving its MIDI mapping");
+    Check(UnavailableNotice(automatic[0], 3, endpoints, {c}) == L"App offline", "another executable cannot be mistaken for a moved app");
+    Check(UnavailableNotice(automatic[0], 3, {}, {}) == L"Input offline" && UnavailableNotice(automatic[0], 1, endpoints, {}) == L"Input unavailable", "missing endpoint and unavailable edition are distinguished");
+    Row paused = automatic[0]; paused.Observe(Resolve({a}, a.endpoint, a.appKey), 0);
+    Check(UnavailableNotice(paused, 3, endpoints, {a, b}).empty(), "present paused session is not labeled moved even with another input session");
     SyncApplications(automatic, endpoints, {a}, 3, nextId);
     Check(automatic.size() == 1 && automatic[0].mapping.source == Source{0, 2, 91} && automatic[0].mapping.use, "returning app keeps source and Use without duplicate row");
     automatic[0].mapping.route = 0; SyncApplications(automatic, endpoints, {a}, 3, nextId);
@@ -107,9 +115,10 @@ void ApplicationTests() {
     automatic[0].mapping.use = true; automatic[0].Observe(Resolve({a}, a.endpoint, a.appKey), 0); automatic[0].Input(0, true); automatic[0].Input(127, true);
     Check(!automatic[0].VolumeWrite() && !Conflict(automatic[0].mapping.source, {}, automatic, 999), "hidden flag independently blocks output and source reservation");
     RestoreRow(automatic[0]);
-    Check(!automatic[0].mapping.hidden && !automatic[0].mapping.use && automatic[0].mapping.source == Source{0, 2, 91}, "restore keeps learned source but requires explicit Use");
+    Check(!automatic[0].mapping.hidden && !automatic[0].mapping.use && !automatic[0].mapping.source.Valid(), "show removed never restores a deleted MIDI source");
     Row unlearned; unlearned.mapping = {nextId++, 2, a.endpoint, a.appKey, a.name, {}, Action::Volume, false}; HideRow(unlearned);
-    Check(Configured(unlearned.mapping), "removing an unlearned row must persist the exclusion");
+    Check(Configured(unlearned.mapping) && !VisibleRow(unlearned, 2), "deleted row suppresses discovery during the current run");
+    Check(ApplicationSetup({}, 3, {unlearned}).mappings.empty(), "deleted rows and their identities are excluded from saved setup");
     Setup profile; profile.endpoints = {L"endpoint 1", L"endpoint 2", L"endpoint 3"}; profile.mappings = {row.mapping, button.mapping}; profile.mappings[0].name = L"Músic \"player\"";
     const auto path = std::filesystem::temp_directory_path() / (L"Elka-AppMidi-test-" + std::to_wstring(GetCurrentProcessId()) + L".applications");
     Check(SaveApplicationSetup(path, profile), "application profile saves atomically"); Setup loaded;
@@ -118,6 +127,8 @@ void ApplicationTests() {
     Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings[0].route == 7 && loaded.endpoints[7] == L"in5" && !loaded.mappings[0].Enabled(), "legacy In 5 mapping preserved but disabled");
     profile.mappings.push_back(unlearned.mapping);
     Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings.back().hidden && !loaded.mappings.back().use && !loaded.mappings.back().source.Valid(), "removed unlearned row survives save and reload");
+    profile.mappings.back().source = {0, 2, 91};
+    Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && !loaded.mappings.back().hidden && !loaded.mappings.back().use && loaded.mappings.back().source.Valid(), "old hidden learned mappings become visible disabled rows for cleanup");
     {
         const std::wstring legacy = L"\ufeffElkaApplicationMidi 2\n3\n\"vaio\"\n\"aux\"\n\"vaio3\"\n\"in1\"\n\"in2\"\n\"in3\"\n\"in4\"\n\"in5\"\n2\n2 1 0 0 7 0 \"vaio3\" \"player.exe\" \"Player\"\n7 1 0 0 8 0 \"in5\" \"browser.exe\" \"Browser\"\n";
         std::ofstream file(path, std::ios::binary | std::ios::trunc); file.write(reinterpret_cast<const char*>(legacy.data()), static_cast<std::streamsize>(legacy.size() * sizeof(wchar_t)));
@@ -208,18 +219,24 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
     note(false); note(true); note(false);
     wait([](const View& v) { return v.rows[1].writes > 0 && v.rows[1].target.muted; }, "note toggles isolated session mute");
     BOOL muted{}; own->GetMute(&muted); Check(muted != FALSE, "note release does not undo mute");
-    send(Operation::Hide, id);
+    send(Operation::Save); wait([](const View& v) { return !v.dirty; }, "save before deletion failure test");
+    const auto lockedProfile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(lockedProfile != INVALID_HANDLE_VALUE, "lock test-owned profile against replacement");
+    send(Operation::Remove, id);
+    wait([](const View& v) { return v.notice.starts_with(L"Could not save deletion."); }, "failed atomic deletion reports failure");
+    Check(controller.Reserved({0, 15, 119}) && snapshot().rows[0].mapping.source.Valid() && !snapshot().rows[0].mapping.hidden, "failed save retains visible assignment and reservation");
+    CloseHandle(lockedProfile);
+    send(Operation::Remove, id);
     wait([](const View& v) { return v.active && v.rows[0].mapping.hidden && !v.rows[0].mapping.use && !v.rows[1].mapping.hidden; }, "remove row disables only that control while other rows keep running");
     Check(!controller.Reserved({0, 15, 119}) && controller.Reserved({1, 15, 118}), "removed row releases its MIDI source without releasing other controls");
     input(0); input(127); Sleep(80); own->GetMasterVolume(&gain);
     Check(std::abs(gain - 0.4f) < 0.001, "removed row cannot change its application's live volume");
     send(Operation::Refresh);
     wait([](const View& v) { return v.rows.size() == 2 && v.rows[0].mapping.hidden && v.rows[0].target.ready; }, "refresh cannot rediscover a removed row");
-    send(Operation::Save); wait([&](const View& v) { return !v.dirty && std::filesystem::exists(path); }, "removed row can be saved");
     Setup hiddenSetup;
-    Check(LoadApplicationSetup(path, hiddenSetup) && hiddenSetup.mappings.size() == 2 && hiddenSetup.mappings[0].hidden && !hiddenSetup.mappings[0].use, "saved removal keeps exact mapping disabled");
+    Check(LoadApplicationSetup(path, hiddenSetup) && hiddenSetup.mappings.size() == 1 && hiddenSetup.mappings[0].source == Source{1, 15, 118} && !snapshot().dirty, "deletion persists immediately without Save and preserves other MIDI");
     Command restore{Operation::RestoreHidden}; restore.route = endpoint.route; controller.Send(restore);
-    wait([](const View& v) { return !v.rows[0].mapping.hidden && !v.rows[0].mapping.use && v.rows[0].mapping.source == Source{0, 15, 119}; }, "restored live row retains MIDI and requires explicit Use");
+    wait([](const View& v) { return !v.rows[0].mapping.hidden && !v.rows[0].mapping.use && !v.rows[0].mapping.source.Valid(); }, "show removed cannot resurrect deleted source");
     send(Operation::Stop); wait([](const View& v) { return !v.active; }, "explicit preview stop");
     send(Operation::BeginAudioReset);
     wait([](const View& v) { return v.audioResetting; }, "reset can hold already stopped controls");
@@ -229,9 +246,17 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
     Check(muted != FALSE && std::abs(gain - 0.4f) < 0.001, "stop blocks both volume and mute writes");
     send(Operation::Refresh); wait([&](const View& v) { return v.rows.size() == 2 && v.rows[0].mapping.id == id && v.rows[0].target.ready; }, "refresh keeps learned identity and paused live session");
     send(Operation::Save); wait([&](const View& v) { return !v.dirty && std::filesystem::exists(path); }, "controller saves independent preview profile");
-    send(Operation::Remove, id); send(Operation::Remove, muteId); wait([](const View& v) { return std::none_of(v.rows.begin(), v.rows.end(), [](const Row& r) { return Configured(r.mapping); }); }, "clear MIDI leaves only unchecked discovery rows");
+    send(Operation::Remove, id); send(Operation::Remove, muteId); wait([](const View& v) { return std::all_of(v.rows.begin(), v.rows.end(), [](const Row& r) { return r.mapping.hidden && !r.mapping.source.Valid(); }); }, "delete all removes every source and suppresses immediate rediscovery");
     heartbeat.request_stop(); heartbeat.join(); controller.Shutdown();
-    Setup saved; Check(LoadApplicationSetup(path, saved) && saved.mappings.size() == 2 && saved.mappings[0].appKey == key, "saved controller mapping retains exact app identity");
+    Setup saved; Check(LoadApplicationSetup(path, saved) && saved.mappings.empty(), "deleted assignments are absent from disk after shutdown");
+    Controller reopened; reopened.Launch(path);
+    for (int i = 0; i < 100; ++i) {
+        reopened.Bridge(true, 3, {});
+        if (reopened.Snapshot().connected) break;
+        Sleep(10);
+    }
+    Check(reopened.Snapshot().connected && !reopened.Reserved({0, 15, 119}) && !reopened.Reserved({1, 15, 118}), "reopening cannot reserve either deleted MIDI source");
+    reopened.Shutdown();
     std::filesystem::remove(path);
 }
 
