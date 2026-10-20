@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+-preview\.\d+$')][string]$Version = '0.4.0-preview.5')
+param([ValidatePattern('^\d+\.\d+\.\d+-preview\.\d+$')][string]$Version = '0.4.0-preview.6')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $root "artifacts\releases\$Version"
@@ -35,8 +35,10 @@ $zip = Join-Path $output "Elka.MidiPickup-$Version-win-x64-unsigned.zip"
 $artZip = Join-Path $output "Elka.MidiPickup-$Version-artwork.zip"
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $zip
 Compress-Archive -Path (Join-Path $artwork '*') -DestinationPath $artZip
-$sums = foreach ($path in @($zip,$artZip,(Join-Path $portable 'Elka.MidiPickup.exe'))) {
+& (Join-Path $PSScriptRoot 'Build-Installer.ps1') -SourceDir $portable -OutputDir $output -Version $Version
+$installer = Join-Path $output "Elka.MidiPickup-$Version-setup-win-x64-unsigned.exe"
+$sums = foreach ($path in @($zip,$artZip,$installer,(Join-Path $portable 'Elka.MidiPickup.exe'))) {
     "{0}  {1}" -f (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path $path -Leaf)
 }
 Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Value $sums -Encoding ascii
-Write-Output "Portable prerelease staged at $output"
+Write-Output "Installer and portable prerelease staged at $output"

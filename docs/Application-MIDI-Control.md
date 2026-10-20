@@ -2,7 +2,7 @@
 
 Application MIDI Control is a separate window for controlling the volume or mute of an individual application on a VoiceMeeter playback input. The existing Strip and Bus pages keep their own pickup engine and Start/Stop controls.
 
-The current local build is **0.4.0-preview.5**. Saved application assignments remain visible when their app disconnects; deleting a row frees its MIDI control immediately and saves the removal. The published 0.3.0 preview does not contain this window.
+The current build is **0.4.0-preview.6**, available as an installer or portable ZIP. Saved application assignments remain visible when their app disconnects; deleting a row frees its MIDI control immediately and saves the removal.
 
 ## First test
 
@@ -13,7 +13,7 @@ The current local build is **0.4.0-preview.5**. Saved application assignments re
 5. Select an application's row, choose **Volume / pickup**, then **Learn selected** and move an unused absolute CC fader or knob. The row shows its MIDI channel and CC number. Controls assigned to enabled Strip/Bus rows are reserved even when strip/bus pickup is stopped. To reuse one, uncheck that original row's Use box and restart any remaining strip/bus mappings.
 6. Remove that new control's duplicate direct mappings in VoiceMeeter, Bome or other software, tick the preview's confirmation, and click **Start applications**. This starts the application rows only. A fader waits until it reaches or crosses the current app volume; the row then says **Tracking**. The default pickup tolerance is three MIDI steps.
 7. Change the **application** volume with the mouse in VoiceMeeter's application list or the Windows volume mixer. The hardware should wait for pickup again. Move quickly in both directions, and check that other applications and whole-strip gains stay unchanged. Closing/reopening the app must re-arm its row rather than replay old movement.
-8. Click **Save applications**. Mappings are stored beside the EXE in `Elka.MidiPickup.applications`, separately from strip/bus settings. This preview always starts stopped and requires its routing confirmation each run. **Stop** in this window stops application control; the main window's Stop stops strip/bus pickup. Hiding either window keeps its active controls running; exiting Elka stops both.
+8. Click **Save applications**. Mappings are stored in `Elka.MidiPickup.applications`, separately from strip/bus settings: in your per-user **Saves** folder when installed, or beside the EXE when portable. See [folder locations](Installation.md). This preview always starts stopped and requires its routing confirmation each run. **Stop** in this window stops application control; the main window's Stop stops strip/bus pickup. Hiding either window keeps its active controls running; exiting Elka stops both.
 
 ## Buttons and encoders
 

@@ -69,9 +69,13 @@ The main process waits asynchronously for helper success, then waits at least 1,
 .\scripts\Package-Prerelease.ps1
 ```
 
-Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.5`.
+Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Inno Setup 6.6+ must be installed. Outputs include an installer EXE, portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.6`.
 
-The package is intentionally labelled **unsigned**. Signing and installer work are separate from this portable test release. New release versions must update `Version.h`, the packaging default, README and release notes together.
+The app, installer and uninstaller are intentionally **unsigned** for this preview. New release versions must update `Version.h`, both packaging script defaults, README and release notes together. Installer sources appear under the solution's Installer folder in Visual Studio 2026.
+
+Installed storage is selected by the installer-only `Elka.MidiPickup.installed` marker beside the EXE. The portable ZIP never contains that marker. `Storage.h` resolves Windows known folders for the current user, creates Saves and Logs before opening devices, and copies adjacent legacy profiles only when no Saves directory exists. Both profiles are staged together before renaming the directory; copy failure leaves no partial destination. Existing destinations are never merged or overwritten. `storage-layout-v1.complete` prevents later reimport of removed assignments. Storage tests inject isolated folder roots and a locked source file; they never alter the user's AppData.
+
+`scripts/Test-Installer.ps1` compiles the same installer source with a separate test AppId/mutex, installs silently into a new workspace fixture, reinstalls, and uninstalls. It never launches the audio app. It checks the shipped EXE and marker, preservation of user-created files, and retention of unrelated startup entries. The shipping installer uses the production mutex and refuses install/uninstall while MIDI Pickup is running. Uninstall removes a startup entry only when its command points exactly to that installation.
 
 ## Publication boundaries
 

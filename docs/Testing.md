@@ -61,8 +61,8 @@ The orange button in the lower right opens **https://ko-fi.com/msffixit** in the
 - **Outside range:** bring the software value into the selected -60-to-Top range or choose a higher Top gain. The app intentionally does not clamp a live software value into pickup.
 - **Slow readback:** after two seconds without confirming progress, only that fader waits for pickup again. The session stays running, the confirmation stays checked, and other faders keep working. Move to the displayed software level to regain control.
 - **Timing recovery:** stale MIDI is discarded and pickup re-arms; Start pickup stays active. Windows busy notifications are valid MIDI packets and are counted as **Bursts**, not errors.
-- **Output stopped after a real error:** read the bottom message. A disconnected mixer/input, invalid gain, malformed MIDI, or rejected write still stops control. Details are in `Elka.MidiPickup.log` beside the EXE.
-- **Settings do not save:** the EXE folder must be writable. This is a portable test build; its setup file lives beside the EXE.
+- **Output stopped after a real error:** read the bottom message. A disconnected mixer/input, invalid gain, malformed MIDI, or rejected write still stops control. Details are in `Elka.MidiPickup.log` in the installed Logs folder, or beside the portable EXE. See [folder locations](Installation.md).
+- **Settings do not save:** check access to the installed Saves folder, or the EXE folder for a portable copy. The installed app does not need administrator rights to save settings.
 
 The gain API range is documented by [VB-Audio](https://download.vb-audio.com/Download_CABLE/VoicemeeterRemoteAPI.pdf). Elka's displayed linear conversion is a test-app choice; the future virtual pass-through version still needs validation against VoiceMeeter's own MIDI mapping curve.
 

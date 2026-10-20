@@ -196,7 +196,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 case Operation::Save: {
                     const auto setup = ApplicationSetup(state.selected, state.tolerance, state.rows);
                     if (SaveApplicationSetup(path, setup)) { state.dirty = false; state.notice = L"Application setup saved separately. This preview always starts stopped."; }
-                    else state.notice = L"Could not save application setup beside the executable.";
+                    else state.notice = L"Could not save application setup. Check folder access: " + path.parent_path().wstring();
                     break;
                 }
                 }

@@ -6,6 +6,7 @@
 #include "ApplicationWindow.h"
 #include "ControlLayout.h"
 #include "AudioReset.h"
+#include "Storage.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <CommCtrl.h>
@@ -80,6 +81,7 @@ private:
     std::optional<DWORD> learnedMessage;
     std::filesystem::path profile;
     std::filesystem::path diagnosticPath;
+    elka::storage::Paths storage;
     // Win32 can re-enter the window procedure while updating controls.
     // The worker never calls window/control APIs and owns all periodic I/O.
     std::recursive_mutex stateMutex;
@@ -219,9 +221,8 @@ private:
         SelectPage(0); Render(); Layout(); return;
 #else
         RefreshPorts();
-        wchar_t path[32768]{}; GetModuleFileNameW(nullptr, path, 32768);
-        profile = std::filesystem::path(path).parent_path() / L"Elka.MidiPickup.ini";
-        diagnosticPath = std::filesystem::path(path).parent_path() / L"Elka.MidiPickup.log";
+        profile = storage.saves / L"Elka.MidiPickup.ini";
+        diagnosticPath = storage.logs / L"Elka.MidiPickup.log";
         std::error_code ec;
         if (std::filesystem::file_size(diagnosticPath, ec) > 1024 * 1024 && !ec)
             std::ofstream(diagnosticPath, std::ios::trunc).close();
@@ -566,14 +567,14 @@ private:
         setup.confirmed = Checked(C(Confirm)); setup.launchTray = Checked(C(LaunchTray));
         setup.launchActive = Checked(C(LaunchActive)); setup.launchWindows = Checked(C(LaunchWindows));
         for (size_t i = 0; i < rows.size(); ++i) setup.mappings[i] = rows[i].mapping;
-        if (!elka::SaveProfile(profile, setup)) { Tell(L"Could not save setup beside the app. Check folder permissions."); return; }
+        if (!elka::SaveProfile(profile, setup)) { Tell(L"Could not save setup. Check folder access: " + profile.parent_path().wstring()); return; }
         savedSetup = setup; savedInput = setup.input; configDirty = false;
         if (ApplyWindowsStartup(setup.launchWindows)) Tell(L"Setup saved. Startup uses these mappings and options. Unsaved changes are not loaded next time.");
     }
     void LoadSetup() {
         startupPending = false; Pause(L""); learning = -1;
         elka::Setup setup;
-        if (!elka::LoadProfile(profile, setup)) { Tell(L"No supported saved setup found beside the app."); return; }
+        if (!elka::LoadProfile(profile, setup)) { Tell(L"No supported saved setup found in: " + profile.parent_path().wstring()); return; }
         if (midi.Open()) DisconnectMidi();
         SendMessageW(C(Range), CB_SETCURSEL, setup.top, 0);
         SendMessageW(C(Tolerance), CB_SETCURSEL, setup.tolerance, 0);
@@ -801,7 +802,7 @@ private:
     }
 public:
     bool Dialog(MSG& message) { return appWindow.Dialog(message); }
-    explicit Application(HINSTANCE appInstance, const std::wstring& arguments) : instance(appInstance) {
+    explicit Application(HINSTANCE appInstance, const std::wstring& arguments, elka::storage::Paths paths) : instance(appInstance), storage(std::move(paths)) {
         forceTray = arguments.find(L"--tray") != std::wstring::npos; forceWindow = arguments.find(L"--show") != std::wstring::npos;
         appWindow.ConfigureAudioReset([this] { BeginAudioReset(); }, [this] {
             std::lock_guard lock(stateMutex);
@@ -965,8 +966,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
         }
         CloseHandle(singleInstance); return 0;
     }
+    elka::storage::Paths storage;
+#ifndef ELKA_UI_INSPECTION
+    std::wstring storageError;
+    try {
+        storage = elka::storage::Current();
+        elka::storage::Prepare(storage, storageError);
+    } catch (...) { storageError = L"Could not locate MIDI Pickup's settings folders. Check your Windows user profile and try again."; }
+    if (!storageError.empty()) {
+        MessageBoxW(nullptr, storageError.c_str(), L"Elka MIDI Pickup — settings unavailable", MB_OK | MB_ICONERROR);
+        if (singleInstance) CloseHandle(singleInstance);
+        return 1;
+    }
+#endif
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&controls);
-    Application application(instance, arguments ? arguments : L"");
+    Application application(instance, arguments ? arguments : L"", std::move(storage));
     WNDCLASSEXW type{sizeof(type)}; type.hInstance = instance; type.lpfnWndProc = WindowProcedure;
     type.lpszClassName = windowClass; type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     type.hIcon = AppIcon(instance, GetSystemMetrics(SM_CXICON)); type.hIconSm = AppIcon(instance, GetSystemMetrics(SM_CXSMICON));

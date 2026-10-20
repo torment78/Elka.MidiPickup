@@ -10,7 +10,7 @@ This release is a working direct-control preview, not the completed virtual MIDI
 - There are eight Strip rows and eight Bus rows. The installed VoiceMeeter edition determines which destinations are valid.
 - The optional display button requires a supported VoiceMeeter Potato version. The tray remains available when this API is absent.
 - VoiceMeeter must use its standard installation location for the current DLL discovery code.
-- This is a portable, unsigned x64 Windows build. Settings and logs require a writable folder. There is no installer, updater, driver installation or Windows upgrade step.
+- The Windows 11 x64 preview includes an unsigned Inno Setup installer and portable ZIP. Installed saves/logs are per-user; portable data needs a writable EXE folder. There is no automatic updater, driver installation or Windows upgrade step.
 - Windows 11 26H2 was used during development. Other Windows builds, devices and mixer editions still need testing. The GUI does not require the optional Microsoft MIDI preview SDK.
 - Saved device names are used for reconnecting. Test setups with identical device names before enabling unattended active startup.
 - Readback timeout re-arms the affected fader; actual device/API failures stop output. Check the status message and reconnect/rearm as appropriate.

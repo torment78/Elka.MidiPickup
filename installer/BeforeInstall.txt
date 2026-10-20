@@ -1,0 +1,17 @@
+Elka MIDI Pickup — testing preview
+
+Exit MIDI Pickup from its tray menu before installing or upgrading.
+
+Programs: Program Files\ElkaSoft\Elka MIDI Pickup
+Settings: %APPDATA%\ElkaSoft\Elka MIDI Pickup\Saves
+Logs: %LOCALAPPDATA%\ElkaSoft\Elka MIDI Pickup\Logs
+
+Each Windows user has separate settings. Upgrades and uninstall keep those settings. The application normally runs without administrator privileges.
+
+VoiceMeeter must be installed and running for live control. This native C++ app does not need .NET, a virtual MIDI driver, or the Windows MIDI Services preview runtime.
+
+Moving from a portable copy? Exit it, then copy Elka.MidiPickup.ini and Elka.MidiPickup.applications from that folder into the Saves folder above. Do this before starting the installed copy. Keep your original files as a backup. Save setup in the installed app to update Launch with Windows.
+
+The optional Reset audio button separately requests administrator approval and briefly interrupts audio. Installation itself does not restart audio or change routing.
+
+This preview and its installer are unsigned.

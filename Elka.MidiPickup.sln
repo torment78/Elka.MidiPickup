@@ -8,6 +8,16 @@ Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "Elka.MidiPickup.Tests", "te
 EndProject
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "Elka.MidiPickup.Probe", "src\Elka.MidiPickup.Probe.vcxproj", "{81460F38-C190-4B10-B057-B026C3BFC660}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Installer", "Installer", "{BD0F450D-A92D-4ED7-8043-24310C74F19E}"
+	ProjectSection(SolutionItems) = preProject
+		installer\Elka.MidiPickup.iss = installer\Elka.MidiPickup.iss
+		installer\Elka.MidiPickup.installed = installer\Elka.MidiPickup.installed
+		installer\BeforeInstall.txt = installer\BeforeInstall.txt
+		scripts\Build-Installer.ps1 = scripts\Build-Installer.ps1
+		scripts\Package-Prerelease.ps1 = scripts\Package-Prerelease.ps1
+		docs\Installation.md = docs\Installation.md
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64

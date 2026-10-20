@@ -4,11 +4,9 @@
 
 Soft takeover for ordinary MIDI faders controlling VoiceMeeter. Move a hardware fader to the current software position before it takes control, so mismatched positions do not cause an immediate volume jump.
 
-**Development build: 0.4.0-preview.5 · Windows x64.** Application MIDI assignments stay visible on their saved input when an app goes offline or moves elsewhere, with a red status. **Delete row** immediately saves the removal and frees the MIDI control. The combined **Reset audio** button and existing strip/bus pickup remain available.
+**Preview: 0.4.0-preview.6 · Windows 11 x64.** Includes an Inno Setup installer, the ElkaSoft folder layout, Application MIDI Control, visible offline assignments, immediate MIDI-binding deletion, and the combined Windows Audio / VoiceMeeter reset.
 
-[Published 0.3.0 prerelease](https://github.com/torment78/Elka.MidiPickup/releases/tag/v0.3.0-preview.1) · [Application MIDI Control beta](docs/Application-MIDI-Control.md) · [Setup and testing](docs/Testing.md) · [Known limitations](docs/Limitations.md) · [Report a problem](https://github.com/torment78/Elka.MidiPickup/issues/new?template=bug_report.md) · [Support on Ko-fi](https://ko-fi.com/msffixit)
-
-The 0.4.0 preview is currently a local/source build; the published 0.3.0 download does not include Application MIDI Control.
+[Download preview](https://github.com/torment78/Elka.MidiPickup/releases/tag/v0.4.0-preview.6) · [Installation and folders](docs/Installation.md) · [Application MIDI Control](docs/Application-MIDI-Control.md) · [Setup and testing](docs/Testing.md) · [Known limitations](docs/Limitations.md) · [Report a problem](https://github.com/torment78/Elka.MidiPickup/issues/new?template=bug_report.md) · [Support on Ko-fi](https://ko-fi.com/msffixit)
 
 ## How pickup works
 
@@ -22,7 +20,7 @@ Elka does not create a virtual MIDI port or forward the controller's other messa
 
 - **Reset audio** in Application MIDI Control runs both restarts from one button. Windows requests administrator approval; audio briefly stops. Existing active controls return armed for pickup.
 
-- Separate **Application MIDI Control** preview: automatic app rows, Use checkboxes, edition-aware VAIO/AUX/VAIO 3 pages, MIDI Learn, independent pickup, mute buttons and explicit relative encoder modes. Remove unwanted rows with the button or right-click menu; restore them when needed. Closed apps leave the list while their learned assignments are retained. [Preview setup and limits](docs/Application-MIDI-Control.md).
+- Separate **Application MIDI Control** preview: automatic app rows, Use checkboxes, edition-aware VAIO/AUX/VAIO 3 pages, MIDI Learn, independent pickup, mute buttons and explicit relative encoder modes. Saved offline rows remain visible in red. **Delete row** saves removal immediately and frees its MIDI control. [Preview setup and limits](docs/Application-MIDI-Control.md).
 
 - **Sixteen independent mappings** across separate Strips and Buses pages; both pages keep processing together.
 - **MIDI Learn** for 7-bit absolute CC faders, with target selection and live hardware/software values.
@@ -36,14 +34,14 @@ Elka does not create a virtual MIDI port or forward the controller's other messa
 
 ## Download and first setup
 
-1. Download **Elka.MidiPickup-0.3.0-preview.1-win-x64-unsigned.zip** from the prerelease page.
-2. Extract the ZIP into a writable folder and run **Elka.MidiPickup.exe**. The EXE is unsigned; the download includes SHA-256 checksums. This preview has no installer.
+1. Download **Elka.MidiPickup-0.4.0-preview.6-setup-win-x64-unsigned.exe** from the preview page. A portable ZIP is also available.
+2. Run the installer, then open Elka MIDI Pickup from the Start menu. For portable use, extract the ZIP into a writable folder and run **Elka.MidiPickup.exe**. Both downloads are unsigned and have SHA-256 checksums.
 3. Start VoiceMeeter, select your **MIDI device**, click **Connect MIDI**, then **Connect VM**.
 4. Pick a row under **Strips** or **Buses**, click **Learn**, move one hardware fader, and choose its target.
 5. Disable that selected fader's other direct mappings, tick the confirmation, and click **Start pickup**.
 6. Test one fader, including fast reversals and a software gain change, then **Save setup**.
 
-Start with a comfortable listening level. First launch stays in monitor mode until you explicitly start pickup. Settings and logs are stored beside the EXE, so do not run it inside the ZIP or a protected installation folder.
+Start with a comfortable listening level. First launch stays in monitor mode until you explicitly start pickup. The installer uses `Program Files\ElkaSoft\Elka MIDI Pickup`; per-user saves and logs live outside Program Files and survive uninstall. Portable settings remain beside the EXE. See [folder paths and moving an existing setup](docs/Installation.md).
 
 The app discovers VoiceMeeter's installed `VoicemeeterRemote64.dll` in the standard `Program Files (x86)\VB\Voicemeeter` location. VoiceMeeter must be installed and running for live control. No VoiceMeeter DLL, Microsoft MIDI preview runtime, or virtual MIDI driver is included.
 
@@ -57,7 +55,7 @@ Before moving or deleting the app, turn off **Launch with Windows** and save. To
 
 ## Testing status
 
-Regression checks cover the original pickup engine, delayed readbacks, reversals, external edits, concurrent MIDI buffering, profiles, application identity, offline assignments, and reset sequencing/recovery. Separate integration checks use a silent test-owned Windows audio session for Learn/Start/pickup/mute/Stop, source conflicts, permanent deletion, save failures, and pausing/re-arming during a reset. These checks do not restart Windows services or replace physical MIDI/audio testing. See the [current release notes](docs/releases/0.4.0-preview.5.md).
+Regression checks cover the original pickup engine, delayed readbacks, reversals, external edits, concurrent MIDI buffering, profiles, application identity, offline assignments, storage migration, and reset sequencing/recovery. Separate integration checks use a silent test-owned Windows audio session for Learn/Start/pickup/mute/Stop, source conflicts, permanent deletion, save failures, and pausing/re-arming during a reset. These checks do not restart Windows services or replace physical MIDI/audio testing. See the [current release notes](docs/releases/0.4.0-preview.6.md).
 
 The earlier 0.2.1 engine was reported working with an APC40 mkII and VoiceMeeter Potato. The latest custom-button cleanup, Windows sign-in launch, unattended active startup and broader hardware/edition compatibility remain acceptance tests. See the [testing checklist](docs/Testing.md) and [release notes](docs/releases/0.3.0-preview.1.md).
 

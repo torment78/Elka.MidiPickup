@@ -13,6 +13,7 @@ void Check(bool value, const char* name) { ++checks; if (!value) throw std::runt
 #include "ApplicationTests.h"
 #include "ApplicationPreview.h"
 #include "AudioResetTests.h"
+#include "StorageTests.h"
 void BurstTests() {
     elka::MidiInbox inbox;
     elka::MidiInbox::Batch batch;
@@ -241,6 +242,7 @@ int main(int argc, char** argv) {
         ProfileTests();
         ApplicationTests();
         AudioResetTests();
+        StorageTests();
         std::cout << "PASS: " << checks << " pickup checks\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }
