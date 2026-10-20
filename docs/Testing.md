@@ -1,5 +1,7 @@
 # Testing the desktop app
 
+For the new separate beta window, see [Application MIDI Control](Application-MIDI-Control.md). The steps below describe the existing strip/bus feature.
+
 ## First physical test
 
 Use one fader initially. Start VoiceMeeter and open `Elka.MidiPickup.exe` from the extracted portable package (or `artifacts\x64\Release` when building from source).

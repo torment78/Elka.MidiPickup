@@ -3,6 +3,7 @@
 #include "Profile.h"
 #include "resource.h"
 #include "Version.h"
+#include "ApplicationWindow.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <CommCtrl.h>
@@ -20,7 +21,7 @@ constexpr int Device = 100, ConnectMidi = 101, Refresh = 102, ConnectVm = 103, D
     Range = 105, Tolerance = 106, Confirm = 107, Start = 108, Stop = 109, Rearm = 110,
     Save = 111, Load = 112, Help = 113, DemoHardware = 114, DemoSoftware = 115,
     Hide = 116, Exit = 117, StripTab = 130, BusTab = 131, SettingsTab = 132,
-    LaunchWindows = 133, LaunchTray = 134, LaunchActive = 135, Donate = 136,
+    LaunchWindows = 133, LaunchTray = 134, LaunchActive = 135, Donate = 136, Applications = 137,
     VmStatus = 120, Banner = 121, Counts = 122, Hint = 123, LastEvent = 124;
 constexpr int RowBase = 200, RowStride = 10;
 constexpr UINT TrayMessage = WM_APP + 30;
@@ -66,6 +67,8 @@ private:
     std::array<double, 16> demoGains{};
     elka::MidiInput midi;
     elka::VoiceMeeter vm;
+    elka::apps::Controller appControl;
+    elka::apps::Window appWindow{appControl};
     elka::MidiInbox::Batch batch;
     std::optional<DWORD> learnedMessage;
     std::filesystem::path profile;
@@ -150,7 +153,8 @@ private:
         Label(L"VoiceMeeter", 4, 24, 144, 110, 24, 2); Label(L"Not connected", VmStatus, 138, 144, 480);
         Button(L"Connect VM", ConnectVm, 634, 134, 152);
         Button(L"Strips", StripTab, 24, 182, 136); Button(L"Buses", BusTab, 166, 182, 136); Button(L"Settings", SettingsTab, 308, 182, 136);
-        Label(L"Both pages run together", 9, 665, 190, 289);
+        Button(L"Application MIDI Control", Applications, 458, 182, 238);
+        Label(L"Strips + buses run together", 9, 708, 190, 246);
         for (int group = 0; group < 2; ++group) {
             buildingPage = group;
             for (const auto& item : {std::pair{24, L"Use"}, {90, L"MIDI source"}, {250, L"Target"}, {447, L"Hardware"}, {585, L"Software"}, {701, L"Pickup state"}})
@@ -256,6 +260,7 @@ private:
         if (!ports.empty()) SendMessageW(C(Device), CB_SETCURSEL, chosen, 0);
     }
     void DisconnectMidi() {
+        appControl.Suspend();
         midi.Close(); learnedMessage.reset(); learning = -1; Check(C(Confirm), false);
         for (auto& row : rows) row.pickup.Disconnect();
         Pause(L"MIDI disconnected. Control is stopped.");
@@ -281,6 +286,7 @@ private:
         Render();
     }
     void ToggleVm() {
+        appControl.Suspend();
         startupPending = false;
         Pause(L"");
         for (auto& row : rows) row.pickup.Disconnect();
@@ -301,6 +307,7 @@ private:
         Render();
     }
     void BeginLearn(int index) {
+        appControl.Suspend();
         startupPending = false; configDirty = true;
         if (!demo && !midi.Open()) { Tell(L"Connect the MIDI input before learning a fader."); return; }
         Pause(L""); learning = learning == index ? -1 : index;
@@ -343,6 +350,9 @@ private:
         if ((status & 0xf0) != 0xb0) return;
         if (learning >= 0) {
             if (!finishLearn) { if (!learnedMessage) learnedMessage = message; return; }
+            if (appControl.Reserved({0, channel, cc})) {
+                Tell(L"That CC is assigned in Application MIDI Control. Use a different control or disable its application row first."); return;
+            }
             for (int i = 0; i < 16; ++i) if (i != learning && rows[i].mapping.channel == channel && rows[i].mapping.cc == cc) {
                 Tell(L"That CC is already assigned to fader " + std::to_wstring(i + 1) + L". Move a different fader."); return;
             }
@@ -385,6 +395,7 @@ private:
         }
     }
     void RecoverInput(const std::wstring& reason) {
+        appControl.Suspend();
         midi.Clear(); learnedMessage.reset();
         for (auto& row : rows) row.pickup.Reset();
         ++timingRecoveries;
@@ -396,17 +407,24 @@ private:
         if (active) maxGap = std::max(maxGap, gap);
         if (active && gap > 300) RecoverInput(L"Processing resumed after a delay.");
         lastFrame = now;
-        if (midi.Open() && midi.Errors() != errorsSeen) { errorsSeen = midi.Errors(); Pause(L"MIDI input reported malformed data. Output stopped; reconnect before testing again."); }
+        if (midi.Open() && midi.Errors() != errorsSeen) { errorsSeen = midi.Errors(); appControl.Suspend(); Pause(L"MIDI input reported malformed data. Output stopped; reconnect before testing again."); }
         if (midi.Open() && midi.Dropped() != dropsSeen) { dropsSeen = midi.Dropped(); RecoverInput(L"MIDI buffer filled during a delay."); }
         PollSoftware(now);
+        if (appControl.Launched()) {
+            std::vector<elka::apps::Source> reserved;
+            for (const auto& row : rows) if (row.mapping.use && row.mapping.channel >= 0)
+                reserved.push_back({0, row.mapping.channel, row.mapping.cc});
+            appControl.Bridge(!demo && midi.Open() && vm.Connected() && learning < 0 && !shuttingDown, vm.edition, reserved);
+        }
         midi.Drain(batch);
         bool stale = false;
         for (size_t i = 0; i < batch.size; ++i) {
             const auto message = batch.messages[i];
             if (static_cast<DWORD>(GetTickCount() - message.at) > 250) {
-                if (!stale) { for (auto& row : rows) row.pickup.Reset(); ++timingRecoveries; }
+                if (!stale) { for (auto& row : rows) row.pickup.Reset(); appControl.Suspend(); ++timingRecoveries; }
                 stale = true; continue;
             }
+            if (!demo && learning < 0) appControl.Midi(message.data, message.at);
             ProcessMidi(message.data);
         }
         if (active) for (auto& row : rows) if (row.mapping.use) {
@@ -557,6 +575,7 @@ private:
     void ExitMain() {
         if (shuttingDown) return;
         shuttingDown = true; startupPending = false; Pause(L"");
+        appControl.Suspend();
         worker.request_stop(); workerWake.notify_all();
         midi.Close(); vm.Close();
         Log(L"Button 2 removal result: " + std::to_wstring(vm.lastButtonRemoval));
@@ -584,7 +603,7 @@ private:
         SetText(C(VmStatus), demo ? L"Simulated mixer  /  no audio writes" : vm.Connected() ?
             std::wstring(vm.edition == 3 ? L"Potato" : vm.edition == 2 ? L"Banana" : L"Standard") +
             (vm.ButtonRegistered() ? L" connected / Button 2 ready" : vm.ButtonSupported() ? L" connected / Adding button 2" : L" connected / No display button") : L"Not connected");
-        SetText(C(Banner), active ? (demo ? L"DEMO PICKUP RUNNING  /  Live audio disconnected" : L"PICKUP RUNNING  /  Selected faders control VoiceMeeter") : L"MONITOR ONLY  /  No gain changes sent");
+        SetText(C(Banner), active ? (demo ? L"DEMO PICKUP RUNNING  /  Live audio disconnected" : L"PICKUP RUNNING  /  Selected faders control VoiceMeeter") : L"STRIP / BUS MONITOR  /  No strip or bus gain changes sent");
         EnableIfNeeded(C(Device), !demo && !midi.Open()); EnableIfNeeded(C(Refresh), !demo && !midi.Open());
         EnableIfNeeded(C(ConnectMidi), !demo); EnableIfNeeded(C(ConnectVm), !demo); EnableIfNeeded(C(Confirm), !demo);
         EnableIfNeeded(C(DemoHardware), demo); EnableIfNeeded(C(DemoSoftware), demo); EnableIfNeeded(C(Save), !demo); EnableIfNeeded(C(Load), !demo);
@@ -696,12 +715,18 @@ private:
         else PostMessageW(window, WM_NULL, 0, 0);
     }
 public:
+    bool Dialog(MSG& message) { return appWindow.Dialog(message); }
     explicit Application(HINSTANCE appInstance, const std::wstring& arguments) : instance(appInstance) {
         forceTray = arguments.find(L"--tray") != std::wstring::npos; forceWindow = arguments.find(L"--show") != std::wstring::npos;
     }
     bool StartHidden() const { return !forceWindow && trayAdded && (forceTray || savedSetup.launchTray); }
-    ~Application() { worker.request_stop(); workerWake.notify_all(); if (worker.joinable()) worker.join(); midi.Close(); vm.Close(); for (auto f : fonts) if (f) DeleteObject(f); DeleteObject(background); DeleteObject(fieldBrush); }
+    ~Application() { worker.request_stop(); workerWake.notify_all(); if (worker.joinable()) worker.join(); appControl.Shutdown(); midi.Close(); vm.Close(); for (auto f : fonts) if (f) DeleteObject(f); DeleteObject(background); DeleteObject(fieldBrush); }
     LRESULT Handle(UINT message, WPARAM w, LPARAM l) {
+        // Creating the preview window must not hold up strip/bus processing.
+        if (message == WM_COMMAND && LOWORD(w) == Applications && HIWORD(w) == BN_CLICKED) {
+            appControl.Launch(profile.parent_path() / L"Elka.MidiPickup.applications");
+            appWindow.Show(window, instance); return 0;
+        }
         // A modal help dialog must not hold the engine lock for its lifetime.
         if (message == WM_COMMAND && LOWORD(w) == Help && HIWORD(w) == BN_CLICKED) { HelpMessage(); return 0; }
         // Launching the browser may be slow; keep MIDI processing independent.
@@ -837,7 +862,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
         }
         CloseHandle(singleInstance); return 0;
     }
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES}; InitCommonControlsEx(&controls);
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&controls);
     Application application(instance, arguments ? arguments : L"");
     WNDCLASSEXW type{sizeof(type)}; type.hInstance = instance; type.lpfnWndProc = WindowProcedure;
     type.lpszClassName = L"ElkaMidiPickupTestWindow"; type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -855,7 +880,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
     DwmSetWindowAttribute(window, 35, &caption, sizeof(caption)); DwmSetWindowAttribute(window, 36, &captionText, sizeof(captionText));
     ShowWindow(window, application.StartHidden() ? SW_HIDE : show); UpdateWindow(window);
     MSG message{};
-    while (GetMessageW(&message, nullptr, 0, 0) > 0) if (!IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) if (!application.Dialog(message) && !IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
     if (singleInstance) CloseHandle(singleInstance);
     return 0;
 }

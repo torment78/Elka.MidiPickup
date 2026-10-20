@@ -4,9 +4,11 @@
 
 Soft takeover for ordinary MIDI faders controlling VoiceMeeter. Move a hardware fader to the current software position before it takes control, so mismatched positions do not cause an immediate volume jump.
 
-**0.3.0-preview.1 · Windows x64 · Prerelease for testing.** The core pickup behavior has been tested with a physical controller, but startup, device recovery and the latest VoiceMeeter button cleanup still need broader testing. This is not a stable release.
+**Development build: 0.4.0-preview.1 · Windows x64.** Adds a separate **Application MIDI Control** beta for per-app volume, mute and MIDI Learn. The existing strip/bus pickup engine is retained. The new application feature still needs physical controller and listening acceptance.
 
-[Download the prerelease](https://github.com/torment78/Elka.MidiPickup/releases/tag/v0.3.0-preview.1) · [Setup and testing](docs/Testing.md) · [Known limitations](docs/Limitations.md) · [Report a problem](https://github.com/torment78/Elka.MidiPickup/issues/new?template=bug_report.md) · [Support on Ko-fi](https://ko-fi.com/msffixit)
+[Published 0.3.0 prerelease](https://github.com/torment78/Elka.MidiPickup/releases/tag/v0.3.0-preview.1) · [Application MIDI Control beta](docs/Application-MIDI-Control.md) · [Setup and testing](docs/Testing.md) · [Known limitations](docs/Limitations.md) · [Report a problem](https://github.com/torment78/Elka.MidiPickup/issues/new?template=bug_report.md) · [Support on Ko-fi](https://ko-fi.com/msffixit)
+
+The 0.4.0 preview is currently a local/source build; the published 0.3.0 download does not include Application MIDI Control.
 
 ## How pickup works
 
@@ -17,6 +19,8 @@ This version reads MIDI input and writes selected gains through the VoiceMeeter 
 Elka does not create a virtual MIDI port or forward the controller's other messages. Other controls can remain on existing routes only when your device/driver supports the required sharing. Check this arrangement before moving a full controller setup over.
 
 ## Features
+
+- Separate **Application MIDI Control** preview: dynamic app rows, edition-aware VAIO/AUX/VAIO 3 pages, MIDI Learn, independent pickup, mute buttons and explicit relative encoder modes. [Preview setup and limits](docs/Application-MIDI-Control.md).
 
 - **Sixteen independent mappings** across separate Strips and Buses pages; both pages keep processing together.
 - **MIDI Learn** for 7-bit absolute CC faders, with target selection and live hardware/software values.
@@ -51,7 +55,7 @@ Before moving or deleting the app, turn off **Launch with Windows** and save. To
 
 ## Testing status
 
-Release and Debug x64 builds and **42,945 regression checks per configuration** passed for this prerelease. Automated tests cover pickup, delayed readbacks, reversals, external edits, concurrent MIDI buffering and profile migration. They do not replace physical MIDI/audio testing.
+The 0.4.0 preview passes **43,107 regression checks per configuration** in Debug and Release x64. These cover the original pickup engine, delayed readbacks, reversals, external edits, concurrent MIDI buffering, profiles and the new application actions/identity rules. Separate integration checks passed against a silent test-owned Windows audio session, including the complete Learn/Start/pickup/mute/Stop flow and source-conflict recovery. They do not replace physical MIDI/audio testing.
 
 The earlier 0.2.1 engine was reported working with an APC40 mkII and VoiceMeeter Potato. The latest custom-button cleanup, Windows sign-in launch, unattended active startup and broader hardware/edition compatibility remain acceptance tests. See the [testing checklist](docs/Testing.md) and [release notes](docs/releases/0.3.0-preview.1.md).
 

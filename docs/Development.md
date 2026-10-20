@@ -11,13 +11,21 @@ Use Visual Studio 2026, the v145 C++ toolset and Windows SDK 10.0.26100.0. The a
 | `app/MidiInbox.h` | Buffered MIDI callback input |
 | `app/Devices.h` | WinMM input and dynamically loaded VoiceMeeter Remote API |
 | `app/Profile.h` | Saved settings and legacy profile migration |
+| `app/ApplicationMidi.h` | App identity, MIDI actions and scalar pickup model |
+| `app/AudioSessions.h` | Windows endpoint/session discovery, notifications and guarded session writes |
+| `app/ApplicationControl.cpp` | Independent MTA worker, preview lifecycle and shared MIDI routing |
+| `app/ApplicationWindow.cpp` | Dynamic application mapping window |
+| `app/ApplicationProfile.h` | Separate versioned preview settings |
 | `app/Version.h` | Displayed prerelease version and Windows version resource |
 | `app/App.rc` | Embedded icon and file/product version metadata |
 | `tests/PickupTests.cpp` | Hardware-independent regression checks |
+| `tests/ApplicationTests.h` | Application pickup/action/profile checks and isolated Core Audio/controller integration |
 | `src/` | Optional native MIDI compatibility probe |
 | `docs/images/` | Header PNG masters, compressed JPEGs and generation prompts |
 
 The processing worker has a nominal 10 ms interval. Visible UI refreshes every 100 ms; hidden/minimized windows skip routine redraws. Actual timing depends on Windows scheduling. Each mapping owns independent pickup state.
+
+The application preview starts its own MTA worker only when first opened. It observes VoiceMeeter playback sessions at a nominal 10 ms while active/learning, 50 ms while stopped, with endpoint reconciliation every two seconds plus session-created notifications. It never enumerates sessions on the strip/bus worker. Identity is the exact endpoint ID and normalized executable path; the sorted session-instance set is revalidated before writes. Session membership changes re-arm pickup. Conflicting enabled sources are blocked across both features.
 
 ## Build and test
 
@@ -32,13 +40,23 @@ The solution builds the app and tests by default. Normal builds require no netwo
 
 Do not run the probe's device or endpoint tests against someone else's active audio setup without arranging that test first. Unit tests do not open MIDI or VoiceMeeter connections.
 
+Optional application integration checks:
+
+```powershell
+.\artifacts\x64\Release\Elka.MidiPickup.Tests.exe --inspect-audio
+.\artifacts\x64\Release\Elka.MidiPickup.Tests.exe --audio-integration
+.\artifacts\x64\Debug\Elka.MidiPickup.Tests.exe --preview-window
+```
+
+`--inspect-audio` reads VoiceMeeter playback endpoints and their sessions. `--audio-integration` creates a silent, non-persistent WASAPI session owned by the tests and changes only that session's volume/mute; it also exercises the preview controller with synthetic MIDI. No audio stream is started. `--preview-window` opens the production preview UI in a development host with a temporary setup and **no MIDI connection**. It reads the VM edition without registering a custom display button, and cannot start application writes. Hide closes this inspection host. Neither helper is shipped in the portable package.
+
 ## Package a preview
 
 ```powershell
 .\scripts\Package-Prerelease.ps1
 ```
 
-Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.3.0-preview.1`.
+Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.1`.
 
 The package is intentionally labelled **unsigned**. Signing and installer work are separate from this portable test release. New release versions must update `Version.h`, the packaging default, README and release notes together.
 

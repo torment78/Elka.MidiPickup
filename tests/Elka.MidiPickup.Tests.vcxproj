@@ -13,8 +13,11 @@
     <ClCompile><LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><ConformanceMode>true</ConformanceMode><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary><RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
     <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization><Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization></ClCompile>
-    <Link><SubSystem>Console</SubSystem></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>ole32.lib;uuid.lib;winmm.lib;comctl32.lib;dwmapi.lib;uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Manifest><AdditionalManifestFiles>..\app\app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="PickupTests.cpp" /><ClInclude Include="..\app\Pickup.h" /></ItemGroup>
+  <ItemGroup><ClInclude Include="ApplicationTests.h" /><ClInclude Include="..\app\ApplicationMidi.h" /><ClInclude Include="..\app\ApplicationProfile.h" /><ClInclude Include="..\app\AudioSessions.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="..\app\ApplicationControl.cpp" /><ClCompile Include="..\app\ApplicationWindow.cpp" /><ClInclude Include="ApplicationPreview.h" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

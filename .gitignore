@@ -5,6 +5,8 @@ artifacts/
 research/*.json
 reports/
 *.ini
+*.applications
+*.applications.tmp
 *.log
 *.pdb
 *.ilk

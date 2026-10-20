@@ -10,6 +10,8 @@
 
 int checks{};
 void Check(bool value, const char* name) { ++checks; if (!value) throw std::runtime_error(name); }
+#include "ApplicationTests.h"
+#include "ApplicationPreview.h"
 void BurstTests() {
     elka::MidiInbox inbox;
     elka::MidiInbox::Batch batch;
@@ -151,7 +153,10 @@ void ProfileTests() {
     Check(elka::LoadProfile(path, loaded) && !loaded.mappings[0].use && !loaded.confirmed, "invalid cross-page target cannot silently control a different fader");
     std::filesystem::remove(path);
 }
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--preview-window") return ApplicationPreview();
+    if (argc > 1 && std::string(argv[1]) == "--inspect-audio") return InspectAudioSessions(false);
+    if (argc > 1 && std::string(argv[1]) == "--audio-integration") return InspectAudioSessions(true);
     try {
         elka::Pickup p;
         p.tolerance = 0;
@@ -230,6 +235,7 @@ int main() {
         SweepTests();
         ReadbackTests();
         ProfileTests();
+        ApplicationTests();
         std::cout << "PASS: " << checks << " pickup checks\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }

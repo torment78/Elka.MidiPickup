@@ -1,0 +1,181 @@
+#include "ApplicationControl.h"
+#include "AudioSessions.h"
+
+namespace elka::apps {
+void Controller::Launch(const std::filesystem::path& path) {
+    if (launched.exchange(true)) return;
+    worker = std::jthread([this, path](std::stop_token stop) {
+        try { Run(stop, path); }
+        catch (...) {
+            std::lock_guard lock(viewMutex); published.active = false; published.connected = false; published.learning = 0;
+            published.notice = L"Application preview stopped after an internal error. Strip/bus processing continues. Restart Elka before retrying the preview.";
+        }
+    });
+}
+void Controller::Shutdown() {
+    if (!launched) return;
+    emergencyStop = true; worker.request_stop(); wake.notify_all();
+    if (worker.joinable()) worker.join();
+    launched = false;
+}
+void Controller::Bridge(bool connected, int edition, const std::vector<Source>& reserved) {
+    if (!launched) return;
+    std::lock_guard lock(inputMutex); link = {connected, edition, GetTickCount64(), reserved};
+}
+void Controller::Run(std::stop_token stop, std::filesystem::path path) {
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(apartment)) { std::lock_guard lock(viewMutex); published.notice = L"Could not initialize Windows audio sessions."; return; }
+    struct Uninitialize { ~Uninitialize() { CoUninitialize(); } } uninitialize;
+    {
+        AudioSessions audio;
+        View state; Setup saved;
+        if (LoadApplicationSetup(path, saved)) {
+            state.selected = saved.endpoints; state.tolerance = saved.tolerance;
+            for (auto& m : saved.mappings) { Row row; row.mapping = std::move(m); state.rows.push_back(std::move(row)); }
+            state.notice = L"Application mappings loaded. Preview is stopped; confirm routing and click Start applications.";
+        } else if (std::filesystem::exists(path)) state.notice = L"Application setup could not be read. No mappings were loaded.";
+        uint64_t nextId = state.rows.size() + 1, discoverAt{}, publishAt{}, lastTick = GetTickCount64(), drops{};
+        MidiInbox::Batch batch;
+        auto reset = [&] { inbox.Clear(); for (auto& row : state.rows) row.Reset(); };
+        auto halt = [&] { state.active = false; state.learning = 0; reset(); };
+        while (!stop.stop_requested()) {
+            const auto now = GetTickCount64();
+            Link current; std::vector<Command> pending;
+            { std::lock_guard lock(inputMutex); current = link; pending.swap(commands); }
+            state.connected = current.connected && now - current.at < 300;
+            state.edition = current.edition;
+            if (emergencyStop.exchange(false) || !state.connected) {
+                if (state.active || state.learning) state.notice = L"Application control stopped: MIDI/VoiceMeeter connection changed. Reconnect, then Start applications.";
+                halt();
+            }
+            if (now - lastTick > 250 || inbox.dropped != drops) { reset(); drops = inbox.dropped; }
+            lastTick = now;
+            if (now >= discoverAt) {
+                audio.Discover(); state.endpoints = audio.Endpoints(); discoverAt = now + 2000;
+                for (int route = 0; route < 3; ++route) if (state.selected[route].empty()) {
+                    std::vector<Endpoint> matches;
+                    for (const auto& endpoint : state.endpoints) if (endpoint.route == route) matches.push_back(endpoint);
+                    if (matches.size() == 1) state.selected[route] = matches.front().id;
+                }
+            }
+            state.sessions = audio.Read();
+            auto reconcile = [&] { for (auto& row : state.rows) {
+                const bool conflict = Conflict(row.mapping.source, current.reserved, state.rows, row.mapping.id) || row.mapping.route >= state.edition ||
+                    std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& other) { return other.mapping.id != row.mapping.id && other.mapping.use && SameTarget(row.mapping, other.mapping); });
+                if (conflict != row.blocked) row.Reset();
+                row.blocked = conflict;
+                row.pickup.tolerance = state.tolerance;
+                row.Observe(Resolve(state.sessions, row.mapping.endpoint, row.mapping.appKey), now);
+            } };
+            reconcile();
+            for (const auto& command : pending) {
+                auto found = std::find_if(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.id == command.row; });
+                Row* row = found == state.rows.end() ? nullptr : &*found;
+                switch (command.operation) {
+                case Operation::Endpoint:
+                    if (command.route < 0 || command.route >= state.edition) break;
+                    if (std::none_of(state.endpoints.begin(), state.endpoints.end(), [&](const Endpoint& e) { return e.id == command.key; })) break;
+                    // Existing mappings retain their explicit endpoint identity.
+                    state.selected[command.route] = command.key; state.dirty = true; break;
+                case Operation::Add: {
+                    if (command.route < 0 || command.route >= state.edition || state.rows.size() >= 128) break;
+                    const auto& endpoint = state.selected[command.route];
+                    const auto app = std::find_if(state.sessions.begin(), state.sessions.end(), [&](const Session& s) { return s.endpoint == endpoint && s.appKey == command.key; });
+                    if (app == state.sessions.end()) { state.notice = L"That application is no longer connected. Start playback and refresh the list."; break; }
+                    Row added; added.mapping = {nextId++, command.route, endpoint, app->appKey, app->name, {}, Action::Volume, true};
+                    if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) {
+                        // Allow a second row for a separate mute button.
+                        added.mapping.action = Action::Mute;
+                        if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) { state.notice = L"This app already has volume and mute rows."; break; }
+                    }
+                    halt(); state.rows.push_back(std::move(added)); state.confirmed = false; state.dirty = true;
+                    state.notice = L"Application added. Select its row, choose the action, then Learn."; break;
+                }
+                case Operation::Remove:
+                    if (row) { halt(); state.rows.erase(found); state.dirty = true; } break;
+                case Operation::Learn:
+                    if (row && state.connected) {
+                        const bool cancel = state.learning == command.row; halt();
+                        state.learning = cancel ? 0 : command.row;
+                        state.notice = cancel ? L"Learn cancelled." : L"Move one control. CC learns a fader/knob; a note learns a mute button. No application writes during Learn.";
+                    } else state.notice = L"Connect MIDI and VoiceMeeter before learning.";
+                    break;
+                case Operation::Use:
+                    if (row) { halt(); row->mapping.use = command.value != 0; row->failed = false; state.dirty = true; } break;
+                case Operation::Mode:
+                    if (row && command.value >= 0 && command.value <= 3) {
+                        halt(); row->mapping.action = static_cast<Action>(command.value);
+                        if (row->mapping.source.kind == 1 && row->mapping.action != Action::Mute) row->mapping.source = {};
+                        row->failed = false; state.dirty = true; state.confirmed = false;
+                    } break;
+                case Operation::Start: {
+                    halt();
+                    if (!state.connected) { state.notice = L"Connect MIDI and VoiceMeeter in the main window first."; break; }
+                    if (!state.confirmed) { state.notice = L"Disable the new controls' duplicate mappings, then tick the confirmation."; break; }
+                    const bool any = std::any_of(state.rows.begin(), state.rows.end(), [](const Row& r) { return r.mapping.use && r.mapping.source.Valid(); });
+                    const bool invalid = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) {
+                        return r.mapping.use && (!r.mapping.source.Valid() || Conflict(r.mapping.source, current.reserved, state.rows, r.mapping.id) || r.blocked);
+                    });
+                    if (!any || invalid) { state.notice = L"Learn each enabled row and resolve duplicate MIDI sources or application targets. Strip/bus controls are reserved."; break; }
+                    for (auto& r : state.rows) r.failed = false;
+                    state.active = true; state.notice = L"Application control running. Faders wait for pickup. Release a mute button once before its first press."; break;
+                }
+                case Operation::Stop: halt(); state.notice = L"Application control stopped. Strip/bus pickup is unchanged."; break;
+                case Operation::Rearm: reset(); for (auto& r : state.rows) r.failed = false; state.notice = L"Applications re-armed. Move each fader toward its current volume."; break;
+                case Operation::Confirm: state.confirmed = command.value != 0; if (!state.confirmed) halt(); break;
+                case Operation::Tolerance: state.tolerance = std::clamp(command.value, 0, 3); state.dirty = true; break;
+                case Operation::Save: {
+                    Setup setup; setup.endpoints = state.selected; setup.tolerance = state.tolerance;
+                    for (const auto& r : state.rows) setup.mappings.push_back(r.mapping);
+                    if (SaveApplicationSetup(path, setup)) { state.dirty = false; state.notice = L"Application setup saved separately. This preview always starts stopped."; }
+                    else state.notice = L"Could not save application setup beside the executable.";
+                    break;
+                }
+                }
+            }
+            // UI edits can introduce conflicts or new targets in this same
+            // cycle. Recompute before accepting any queued MIDI movement.
+            if (!pending.empty()) reconcile();
+            inbox.Drain(batch);
+            for (size_t i = 0; i < batch.size; ++i) {
+                const auto& packet = batch.messages[i];
+                if (static_cast<DWORD>(GetTickCount() - packet.at) > 250) { reset(); continue; }
+                const auto message = Decode(packet.data); if (!message) continue;
+                if (state.learning) {
+                    auto row = std::find_if(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.id == state.learning; });
+                    if (row == state.rows.end() || (message->source.kind == 1 && message->value == 0)) continue;
+                    if (Conflict(message->source, current.reserved, state.rows, row->mapping.id)) { state.notice = L"That MIDI control is already used. Move a different control, or disable its other row first."; continue; }
+                    row->mapping.source = message->source; if (message->source.kind == 1) row->mapping.action = Action::Mute;
+                    row->Reset(); row->pickup.hardware = message->value; row->failed = false;
+                    state.learning = 0; state.confirmed = false; state.dirty = true;
+                    state.notice = L"MIDI learned. Check the action, disable duplicate direct mappings, then Start applications.";
+                    // The learn gesture is never replayed as volume/mute output.
+                    break;
+                }
+                for (auto& row : state.rows) if (row.mapping.source == message->source) row.Input(message->value, state.active);
+            }
+            // A command or enumeration may have taken time. Require a fresh
+            // main-worker heartbeat and discard output after any long stall.
+            if (GetTickCount64() - now > 250) reset();
+            bool fresh{};
+            { std::lock_guard lock(inputMutex); fresh = link.connected && GetTickCount64() - link.at < 300; }
+            if (state.active && fresh && !emergencyStop && !stop.stop_requested()) for (auto& row : state.rows) {
+                if (!row.mapping.use || !row.Ready()) continue;
+                { std::lock_guard lock(inputMutex);
+                    if (Conflict(row.mapping.source, link.reserved, state.rows, row.mapping.id)) { row.Reset(); row.blocked = true; continue; }
+                }
+                const auto gain = row.VolumeWrite(); const auto mute = row.muteWrite;
+                if (!gain && !mute) continue;
+                if (!audio.Write(row.mapping, row.target, gain, mute)) {
+                    row.Reset(); row.failed = true; state.notice = L"An application changed or rejected a write. That row is stopped; check its level and click Re-arm."; continue;
+                }
+                if (gain && row.mapping.action == Action::Volume) row.pickup.Written(Row::Encode(*gain), GetTickCount64());
+                row.muteWrite.reset(); row.relativeWrite.reset(); ++row.writes;
+            }
+            if (!audio.error.empty()) state.notice = audio.error;
+            if (now >= publishAt || !pending.empty()) { std::lock_guard lock(viewMutex); published = state; publishAt = now + 100; }
+            std::unique_lock lock(waitMutex); wake.wait_for(lock, stop, std::chrono::milliseconds(state.active || state.learning ? 10 : 50), [] { return false; });
+        }
+    }
+}
+}

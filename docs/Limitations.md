@@ -2,8 +2,8 @@
 
 This release is a working direct-control preview, not the completed virtual MIDI pass-through application.
 
-- Input is limited to 7-bit **absolute MIDI Control Change** values. Relative encoders, 14-bit CC, pitch bend, motorized feedback and SysEx forwarding are not implemented.
-- Elka sends gains through the VoiceMeeter Remote API and sends no MIDI back to the controller.
+- Strip/bus pickup uses 7-bit **absolute MIDI Control Change** values. The separate [Application MIDI Control preview](Application-MIDI-Control.md) also supports note/CC mute buttons and two explicit relative-encoder modes. 14-bit CC, pitch bend, motorized feedback and SysEx forwarding are not implemented.
+- Strip/bus gains use the VoiceMeeter Remote API; per-application volume/mute uses Windows audio sessions. Elka sends no MIDI back to the controller.
 - Selected faders must have their duplicate mappings disabled in other software. Elka does not edit those mappings automatically.
 - Other controller functions are not forwarded by Elka. Sharing the physical device depends on Windows and the device driver; simultaneous access cannot be assumed.
 - The gain curve is linear in dB from -60 to the selected maximum. It is not a reproduction of every VoiceMeeter MIDI-mapping curve.
