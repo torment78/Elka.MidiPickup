@@ -72,12 +72,39 @@ void ApplicationTests() {
     row.mapping.use = true;
     Check(Conflict(row.mapping.source, {}, {row}, 999) && !Conflict(row.mapping.source, {}, {row}, row.mapping.id), "preview duplicates rejected but relearn self allowed");
     Check(!SameTarget(row.mapping, button.mapping), "separate volume and mute rows allowed");
+    Check(EndpointRoute(L"Voicemeeter In 5 (VB-Audio Voicemeeter VAIO)") == 7 && EndpointRoute(L"Voicemeeter In 1") == 3, "numbered input endpoints have distinct routes");
+    Check(EndpointRoute(L"Voicemeeter In 10") == -1 && EndpointRoute(L"Other Input") == -1, "unknown endpoints never guessed");
+    for (int edition = 1; edition <= 3; ++edition) {
+        int available{}; for (int route = 0; route < RouteCount; ++route) if (RouteAvailable(route, edition)) ++available;
+        Check(available == (edition == 1 ? 3 : edition == 2 ? 5 : 8), "input buttons follow VoiceMeeter edition");
+    }
+    Check(!RouteAvailable(0, 0) && !RouteAvailable(-1, 3) && !RouteAvailable(8, 3), "disconnected and invalid routes unavailable");
+    std::vector<Endpoint> endpoints{{L"vaio3", L"VAIO 3", 2, true}, {L"aux", L"AUX", 1, true}};
+    std::vector<Row> automatic; uint64_t nextId = 1;
+    SyncApplications(automatic, endpoints, {a, a, b, c}, 3, nextId);
+    Check(automatic.size() == 3 && std::none_of(automatic.begin(), automatic.end(), [](const Row& r) { return Configured(r.mapping); }), "all present apps appear once per endpoint and start unchecked");
+    const auto firstId = automatic[0].mapping.id; automatic[0].mapping.source = {0, 2, 91}; automatic[0].mapping.use = true;
+    SyncApplications(automatic, endpoints, {}, 3, nextId);
+    Check(automatic.size() == 1 && automatic[0].mapping.id == firstId, "closed apps discard discovery rows but retain learned assignments");
+    SyncApplications(automatic, endpoints, {a}, 3, nextId);
+    Check(automatic.size() == 1 && automatic[0].mapping.source == Source{0, 2, 91} && automatic[0].mapping.use, "returning app keeps source and Use without duplicate row");
+    automatic[0].mapping.route = 0; SyncApplications(automatic, endpoints, {a}, 3, nextId);
+    Check(automatic[0].mapping.route == 2 && automatic[0].mapping.endpoint == a.endpoint, "legacy endpoint choice migrates by identity without retargeting");
+    SyncApplications(automatic, endpoints, {a, b}, 1, nextId);
+    Check(automatic.size() == 1, "edition changes retain saved mappings but do not discover unsupported inputs");
     Setup profile; profile.endpoints = {L"endpoint 1", L"endpoint 2", L"endpoint 3"}; profile.mappings = {row.mapping, button.mapping}; profile.mappings[0].name = L"Músic \"player\"";
     const auto path = std::filesystem::temp_directory_path() / (L"Elka-AppMidi-test-" + std::to_wstring(GetCurrentProcessId()) + L".applications");
     Check(SaveApplicationSetup(path, profile), "application profile saves atomically"); Setup loaded;
     Check(LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 2 && loaded.mappings[0].name == profile.mappings[0].name && loaded.endpoints == profile.endpoints, "application profile Unicode and mapping identity round trip");
+    profile.endpoints[7] = L"in5"; profile.mappings[0].route = 7; profile.mappings[0].endpoint = L"in5";
+    Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings[0].route == 7 && loaded.endpoints[7] == L"in5", "v2 profile supports In 5");
+    {
+        const std::wstring legacy = L"\ufeffElkaApplicationMidi 1\n3\n\"vaio\"\n\"aux\"\n\"vaio3\"\n1\n2 1 0 0 7 0 \"actual-in5\" \"player.exe\" \"Player\"\n";
+        std::ofstream file(path, std::ios::binary | std::ios::trunc); file.write(reinterpret_cast<const char*>(legacy.data()), static_cast<std::streamsize>(legacy.size() * sizeof(wchar_t)));
+    }
+    Check(LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 1 && loaded.mappings[0].endpoint == L"actual-in5" && loaded.mappings[0].source.number == 7, "v1 profile migrates exact endpoint and MIDI source");
     std::ofstream(path, std::ios::binary | std::ios::trunc) << "broken";
-    Check(!LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 2, "corrupt application profile rejected without partial replacement");
+    Check(!LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 1, "corrupt application profile rejected without partial replacement");
     std::filesystem::remove(path);
 }
 
@@ -92,18 +119,24 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     });
+    auto snapshot = [&] {
+        auto v = controller.Snapshot();
+        std::erase_if(v.rows, [&](const Row& r) { return r.mapping.appKey != key || r.mapping.endpoint != endpoint.id; });
+        return v;
+    };
     auto wait = [&](auto condition, const char* name) {
-        for (int i = 0; i < 200; ++i) { if (condition(controller.Snapshot())) { Check(true, name); return; } Sleep(10); }
+        for (int i = 0; i < 200; ++i) { if (condition(snapshot())) { Check(true, name); return; } Sleep(10); }
         Check(false, name);
     };
     auto send = [&](Operation op, uint64_t row = 0, int value = 0) { Command c{op}; c.row = row; c.value = value; controller.Send(std::move(c)); };
     auto input = [&](int value) { controller.Midi(0xbf | (119u << 8) | (static_cast<DWORD>(value) << 16), GetTickCount()); };
     own->SetMasterVolume(0.63f, nullptr); own->SetMute(FALSE, nullptr);
     wait([&](const View& v) { return v.connected && Resolve(v.sessions, endpoint.id, key).ready; }, "controller discovers isolated test session");
-    Command choose{Operation::Endpoint}; choose.route = endpoint.route; choose.key = endpoint.id; controller.Send(choose);
-    Command add{Operation::Add}; add.route = endpoint.route; add.key = key; controller.Send(add);
-    wait([](const View& v) { return v.rows.size() == 1; }, "dynamic add creates application row");
-    const auto id = controller.Snapshot().rows[0].mapping.id;
+    wait([](const View& v) { return v.rows.size() == 1 && !v.rows[0].mapping.use; }, "live session automatically creates unchecked application row");
+    const auto initial = controller.Snapshot();
+    Check(std::none_of(initial.rows.begin(), initial.rows.end(), [](const Row& r) { return r.mapping.use; }), "discovery never enables another app");
+    const auto id = snapshot().rows[0].mapping.id;
+    send(Operation::Use, id, 1);
     send(Operation::Learn, id); wait([&](const View& v) { return v.learning == id; }, "controller enters MIDI Learn"); input(0);
     wait([](const View& v) { return !v.learning && v.rows[0].mapping.source == Source{0, 15, 119}; }, "controller learns real message format");
     float gain{}; own->GetMasterVolume(&gain); Check(std::abs(gain - 0.63f) < 0.001, "learning does not change session volume");
@@ -125,8 +158,8 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
     wait([](const View& v) { return !v.active && !v.connected; }, "loss of shared MIDI connection stops preview");
     connected = true; wait([](const View& v) { return v.connected; }, "connection restored");
     input(0); input(127); Sleep(70); own->GetMasterVolume(&gain); Check(std::abs(gain - 0.4f) < 0.001, "reconnection requires explicit start");
-    controller.Send(add); wait([](const View& v) { return v.rows.size() == 2; }, "second app row creates separate mute control");
-    const auto muteId = controller.Snapshot().rows[1].mapping.id;
+    Command add{Operation::Add}; add.row = id; controller.Send(add); wait([](const View& v) { return v.rows.size() == 2; }, "extra control creates separate mute row");
+    const auto muteId = snapshot().rows[1].mapping.id; send(Operation::Use, muteId, 1);
     send(Operation::Learn, muteId); wait([&](const View& v) { return v.learning == muteId; }, "learn mute row");
     auto note = [&](bool press) { controller.Midi((press ? 0x9fu : 0x8fu) | (118u << 8) | (press ? (127u << 16) : 0), GetTickCount()); };
     note(true); wait([](const View& v) { return !v.learning && v.rows[1].mapping.source.kind == 1 && v.rows[1].mapping.action == Action::Mute; }, "note learns mute action");
@@ -137,11 +170,64 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
     send(Operation::Stop); wait([](const View& v) { return !v.active; }, "explicit preview stop");
     note(true); note(false); input(127); Sleep(80); own->GetMute(&muted); own->GetMasterVolume(&gain);
     Check(muted != FALSE && std::abs(gain - 0.4f) < 0.001, "stop blocks both volume and mute writes");
+    send(Operation::Refresh); wait([&](const View& v) { return v.rows.size() == 2 && v.rows[0].mapping.id == id && v.rows[0].target.ready; }, "refresh keeps learned identity and paused live session");
     send(Operation::Save); wait([&](const View& v) { return !v.dirty && std::filesystem::exists(path); }, "controller saves independent preview profile");
-    send(Operation::Remove, id); send(Operation::Remove, muteId); wait([](const View& v) { return v.rows.empty(); }, "dynamic removal leaves no controlled target");
+    send(Operation::Remove, id); send(Operation::Remove, muteId); wait([](const View& v) { return std::none_of(v.rows.begin(), v.rows.end(), [](const Row& r) { return Configured(r.mapping); }); }, "clear MIDI leaves only unchecked discovery rows");
     heartbeat.request_stop(); heartbeat.join(); controller.Shutdown();
     Setup saved; Check(LoadApplicationSetup(path, saved) && saved.mappings.size() == 2 && saved.mappings[0].appKey == key, "saved controller mapping retains exact app identity");
     std::filesystem::remove(path);
+}
+
+// A separate test-owned process holds a silent session, then exits normally.
+// Keeping the monitor alive across its exit exercises stale-session cleanup.
+int SessionChild(const char* endpointArg, const char* readyArg, const char* exitArg) {
+    using namespace elka::apps;
+    auto wide = [](const char* s) { return std::wstring(s, s + strlen(s)); }; // These arguments are GUIDs and ASCII event names.
+    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return 2;
+    int result = 1;
+    {
+        ComPtr<IMMDeviceEnumerator> devices; ComPtr<IMMDevice> device; ComPtr<IAudioClient> client;
+        if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&devices))) &&
+            SUCCEEDED(devices->GetDevice(wide(endpointArg).c_str(), &device)) &&
+            SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(client.GetAddressOf())))) {
+            WAVEFORMATEX* format{};
+            if (SUCCEEDED(client->GetMixFormat(&format))) {
+                GUID session{}; CoCreateGuid(&session);
+                const auto hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_NOPERSIST, 1000000, 0, format, &session); CoTaskMemFree(format);
+                if (SUCCEEDED(hr)) {
+                    HANDLE ready = OpenEventW(EVENT_MODIFY_STATE, FALSE, wide(readyArg).c_str()), exit = OpenEventW(SYNCHRONIZE, FALSE, wide(exitArg).c_str());
+                    if (ready && exit) { SetEvent(ready); WaitForSingleObject(exit, 8000); result = 0; }
+                    if (ready) CloseHandle(ready); if (exit) CloseHandle(exit);
+                }
+            }
+        }
+    }
+    CoUninitialize(); return result;
+}
+void ClosedProcessIntegration(elka::apps::AudioSessions& audio, const elka::apps::Endpoint& endpoint) {
+    using namespace elka::apps;
+    const auto prefix = L"Local\\ElkaSessionTest-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+    const auto readyName = prefix + L"-ready", exitName = prefix + L"-exit";
+    struct Child {
+        HANDLE ready{}, exit{}, process{}, thread{};
+        ~Child() { if (exit) SetEvent(exit); if (process) { WaitForSingleObject(process, 9000); CloseHandle(process); } if (thread) CloseHandle(thread); if (ready) CloseHandle(ready); if (exit) CloseHandle(exit); }
+    } child;
+    child.ready = CreateEventW(nullptr, TRUE, FALSE, readyName.c_str()); child.exit = CreateEventW(nullptr, TRUE, FALSE, exitName.c_str());
+    Check(child.ready && child.exit, "session lifecycle test events");
+    wchar_t executable[32768]{}; GetModuleFileNameW(nullptr, executable, 32768);
+    auto command = L"\"" + std::wstring(executable) + L"\" --session-child \"" + endpoint.id + L"\" \"" + readyName + L"\" \"" + exitName + L"\"";
+    STARTUPINFOW startup{sizeof(startup)}; startup.dwFlags = STARTF_USESHOWWINDOW; startup.wShowWindow = SW_HIDE; PROCESS_INFORMATION process{};
+    Check(CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process) != FALSE, "launch isolated session child");
+    child.process = process.hProcess; child.thread = process.hThread;
+    Check(WaitForSingleObject(child.ready, 5000) == WAIT_OBJECT_0, "child silent session ready");
+    const auto key = Lower(executable);
+    Target target;
+    for (int i = 0; i < 100; ++i) { target = Resolve(audio.Read(), endpoint.id, key); if (target.ready) break; Sleep(20); }
+    Check(target.ready, "monitor discovers session owned by child process");
+    SetEvent(child.exit); Check(WaitForSingleObject(child.process, 5000) == WAIT_OBJECT_0, "child exits without disturbing other apps");
+    for (int i = 0; i < 100; ++i) { target = Resolve(audio.Read(), endpoint.id, key); if (!target.ready) break; Sleep(20); }
+    Check(!target.ready, "closed process disappears from monitored sessions");
+    audio.Refresh(); Check(!Resolve(audio.Read(), endpoint.id, key).ready, "refresh cannot resurrect a closed application");
 }
 
 int InspectAudioSessions(bool integration) {
@@ -159,6 +245,7 @@ int InspectAudioSessions(bool integration) {
         if (integration) {
             const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [](const Endpoint& e) { return e.route >= 0; });
             Check(endpoint != endpoints.end(), "VoiceMeeter playback endpoint available for isolated test");
+            ClosedProcessIntegration(audio, *endpoint);
             ComPtr<IMMDeviceEnumerator> devices; Check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&devices))), "test device enumerator");
             ComPtr<IMMDevice> device; Check(SUCCEEDED(devices->GetDevice(endpoint->id.c_str(), &device)), "test endpoint");
             ComPtr<IAudioClient> client; Check(SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(client.GetAddressOf()))), "test audio client");

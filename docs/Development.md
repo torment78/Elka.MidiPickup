@@ -7,6 +7,7 @@ Use Visual Studio 2026, the v145 C++ toolset and Windows SDK 10.0.26100.0. The a
 | Path | Purpose |
 | --- | --- |
 | `app/Main.cpp` | Win32 UI, worker coordination, tray and startup handling |
+| `app/ControlLayout.h` | Cached control geometry and deferred child repainting |
 | `app/Pickup.h` | Per-fader pickup and readback state machine |
 | `app/MidiInbox.h` | Buffered MIDI callback input |
 | `app/Devices.h` | WinMM input and dynamically loaded VoiceMeeter Remote API |
@@ -46,9 +47,14 @@ Optional application integration checks:
 .\artifacts\x64\Release\Elka.MidiPickup.Tests.exe --inspect-audio
 .\artifacts\x64\Release\Elka.MidiPickup.Tests.exe --audio-integration
 .\artifacts\x64\Debug\Elka.MidiPickup.Tests.exe --preview-window
+.\artifacts\x64\Debug\Elka.MidiPickup.Tests.exe --preview-main
 ```
 
-`--inspect-audio` reads VoiceMeeter playback endpoints and their sessions. `--audio-integration` creates a silent, non-persistent WASAPI session owned by the tests and changes only that session's volume/mute; it also exercises the preview controller with synthetic MIDI. No audio stream is started. `--preview-window` opens the production preview UI in a development host with a temporary setup and **no MIDI connection**. It reads the VM edition without registering a custom display button, and cannot start application writes. Hide closes this inspection host. Neither helper is shipped in the portable package.
+`--inspect-audio` reads VoiceMeeter playback endpoints and their sessions. `--audio-integration` creates silent, non-persistent WASAPI sessions owned by the tests and changes only their volume/mute. A short-lived child process tests cleanup across process exit; the controller is exercised with synthetic MIDI. No audio stream is started. `--preview-window` opens the production preview UI in a development host with a temporary setup and **no MIDI connection**. It reads the VM edition without registering a custom display button, and cannot start application writes. Hide closes this inspection host. `--preview-main` compiles the production main window in an inspection-only mode: no profiles, startup registration, devices, tray or processing worker; only page navigation and Exit commands are accepted. It can run beside the user's normal app. Neither helper is shipped in the portable package.
+
+The layout caches the requested dimensions of controls, including the expanded height of dropdowns. Scroll-only moves use `SWP_NOSIZE`; layout work disables intermediate redraw/copying and invalidates all children after repositioning. A wheel message at the scroll boundary performs no control moves. Closed dropdowns do not consume wheel input as a selection change. Verify scrolling, dropdown open/close, page changes and reduced window heights in the inspection host.
+
+Application profiles use version 2 for eight input routes and still read version 1. Endpoint IDs remain authoritative when older manually selected routes are classified into the new pages. Discovery-only rows are unchecked and omitted from saved profiles. Closed configured apps remain in the model but are hidden by the UI; session membership changes re-arm pickup. Windows process handles are retained to identify exited owners without relying on a reused PID. Refresh releases this client's cached session interfaces without restarting audio services.
 
 ## Package a preview
 
@@ -56,7 +62,7 @@ Optional application integration checks:
 .\scripts\Package-Prerelease.ps1
 ```
 
-Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.1`.
+Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.2`.
 
 The package is intentionally labelled **unsigned**. Signing and installer work are separate from this portable test release. New release versions must update `Version.h`, the packaging default, README and release notes together.
 

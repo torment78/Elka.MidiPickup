@@ -9,7 +9,7 @@
 namespace elka::apps {
 namespace {
 constexpr COLORREF Back = RGB(23, 21, 24), Field = RGB(33, 30, 33), Ink = RGB(242, 235, 229), Muted = RGB(185, 173, 167), Amber = RGB(239, 168, 97);
-enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, EndpointLabel, EndpointList, AppLabel, AppList, AddApp, Rows,
+enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, In1, In2, In3, In4, In5, AppLabel, Refresh, AddApp, Rows,
     Learn, Mode, Remove, ToleranceLabel, ToleranceList, Confirm, Start, Stop, Rearm, Save, Close, Status, SelectionHint };
 const wchar_t* ActionName(Action action) {
     switch (action) { case Action::Volume: return L"Volume / pickup"; case Action::Mute: return L"Mute button";
@@ -29,7 +29,7 @@ std::wstring State(const Row& row, const View& view) {
     if (row.mapping.id == view.learning) return L"Move control...";
     if (!row.mapping.use) return L"Disabled";
     if (!row.mapping.source.Valid()) return L"Not learned";
-    if (row.mapping.route >= view.edition) return L"Input unavailable";
+    if (!RouteAvailable(row.mapping.route, view.edition)) return L"Input unavailable";
     if (row.blocked) return L"Assignment conflict";
     if (row.failed) return L"Stopped / re-arm";
     if (!row.target.ready) return L"App offline";
@@ -53,6 +53,7 @@ HWND Window::Add(const wchar_t* type, const wchar_t* text, DWORD style, int id) 
 LRESULT CALLBACK Window::DarkControl(HWND control, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR context) {
     auto& self = *reinterpret_cast<Window*>(context);
     if (message == WM_NCDESTROY) RemoveWindowSubclass(control, DarkControl, id);
+    if (message == WM_MOUSEWHEEL && id == 1 && !SendMessageW(control, CB_GETDROPPEDSTATE, 0, 0)) return 0;
     if (id == 3 && (message == WM_NOTIFY || message == WM_DRAWITEM)) {
         const auto result = SendMessageW(self.window, message, w, l);
         if (result) return result;
@@ -111,14 +112,19 @@ void Window::Layout() {
     if (!Control(Rows)) return;
     RECT rect{}; GetClientRect(window, &rect);
     const int width = MulDiv(rect.right, 96, dpi), height = MulDiv(rect.bottom, 96, dpi), right = width - 24;
-    auto move = [&](int id, int x, int y, int w, int h) { MoveWindow(Control(id), Scale(x), Scale(y), Scale(std::max(w, 10)), Scale(h), TRUE); };
+    auto move = [&](int id, int x, int y, int w, int h) { controlLayout.Place(Control(id), Scale(x), Scale(y), Scale(std::max(w, 10)), Scale(h)); };
     move(Title, 24, 15, right - 24, 38); move(Subtitle, 24, 59, right - 24, 24);
-    move(Vaio, 24, 94, 130, 32); move(Aux, 164, 94, 130, 32); move(Vaio3, 304, 94, 130, 32);
-    move(EndpointLabel, 24, 145, 150, 24); move(EndpointList, 182, 139, right - 182, 250);
-    move(AppLabel, 24, 188, 150, 24); move(AppList, 182, 182, right - 326, 300); move(AddApp, right - 130, 182, 130, 32);
-    move(Rows, 24, 232, right - 24, height - 444);
+    int tabX = 24;
+    for (int i = 0; i < RouteCount; ++i) {
+        move(Vaio + i, tabX, 94, 90, 32);
+        if (RouteAvailable(i, view.edition)) tabX += 98;
+    }
+    move(Refresh, right - 148, 94, 148, 32);
+    move(AppLabel, 24, 141, right - 24, 38);
+    move(Rows, 24, 184, right - 24, height - 396);
     const int bottom = height - 196;
-    move(Learn, 24, bottom, 140, 32); move(Mode, 176, bottom, 236, 180); move(Remove, 424, bottom, 130, 32);
+    move(Learn, 24, bottom, 140, 32); move(Mode, 176, bottom, 224, 180);
+    move(AddApp, 412, bottom, 130, 32); move(Remove, 554, bottom, 130, 32);
     move(ToleranceLabel, right - 253, bottom + 5, 110, 24); move(ToleranceList, right - 140, bottom, 140, 160);
     move(SelectionHint, 24, bottom + 39, right - 24, 24);
     move(Confirm, 24, bottom + 67, right - 24, 27);
@@ -127,7 +133,7 @@ void Window::Layout() {
     move(Status, 24, bottom + 149, right - 24, 43);
     const int fixed[] = {48, 130, 0, 155, 90, 115, 180};
     for (int i = 0; i < 7; ++i) ListView_SetColumnWidth(Control(Rows), i, Scale(i == 2 ? std::max(140, width - 770) : fixed[i]));
-    InvalidateRect(window, nullptr, TRUE);
+    controlLayout.Finish(window);
 }
 uint64_t Window::Selected() const {
     const int index = ListView_GetNextItem(Control(Rows), -1, LVNI_SELECTED);
@@ -135,51 +141,37 @@ uint64_t Window::Selected() const {
 }
 void Window::Render() {
     if (!window) return;
-    rendering = true; view = controller.Snapshot();
-    if (view.edition > 0 && route >= view.edition) route = 0;
-    for (int i = 0; i < 3; ++i) { ShowWindow(Control(Vaio + i), view.edition == 0 || i < view.edition ? SW_SHOW : SW_HIDE); EnableWindow(Control(Vaio + i), view.edition > i); InvalidateRect(Control(Vaio + i), nullptr, TRUE); }
+    rendering = true; const int previousEdition = view.edition; view = controller.Snapshot();
+    if (!RouteAvailable(route, view.edition)) route = 0;
+    for (int i = 0; i < RouteCount; ++i) {
+        const bool available = RouteAvailable(i, view.edition);
+        const bool detected = std::any_of(view.endpoints.begin(), view.endpoints.end(), [&](const Endpoint& e) { return e.route == i; });
+        if ((IsWindowVisible(Control(Vaio + i)) != FALSE) != available) ShowWindow(Control(Vaio + i), available ? SW_SHOW : SW_HIDE);
+        if ((IsWindowEnabled(Control(Vaio + i)) != FALSE) != (available && detected)) EnableWindow(Control(Vaio + i), available && detected);
+    }
+    if (view.edition != previousEdition) Layout();
     Set(Control(Subtitle), view.active ? L"PREVIEW RUNNING  /  Individual application volume and mute" : L"PREVIEW STOPPED  /  Strip and bus pickup continues independently");
-    std::wstring signature = std::to_wstring(route) + view.selected[route];
-    for (const auto& e : view.endpoints) if (e.voiceMeeter) signature += e.id + e.name;
-    if (signature != endpointSignature) {
-        endpointSignature = signature; endpointKeys.clear(); SendMessageW(Control(EndpointList), CB_RESETCONTENT, 0, 0);
-        int selected = -1;
-        for (const auto& e : view.endpoints) if (e.voiceMeeter) {
-            if (e.id == view.selected[route]) selected = static_cast<int>(endpointKeys.size());
-            endpointKeys.push_back(e.id); SendMessageW(Control(EndpointList), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(e.name.c_str()));
-        }
-        if (selected < 0 && !view.selected[route].empty()) {
-            selected = static_cast<int>(endpointKeys.size()); endpointKeys.push_back(view.selected[route]);
-            SendMessageW(Control(EndpointList), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Saved playback endpoint is offline"));
-        }
-        SendMessageW(Control(EndpointList), CB_SETCURSEL, selected, 0);
-    }
-    std::map<std::wstring, std::wstring> apps;
-    for (const auto& s : view.sessions) if (s.endpoint == view.selected[route]) apps[s.appKey] = s.name;
-    signature = view.selected[route]; for (const auto& [key, name] : apps) signature += key + name;
-    if (signature != appSignature) {
-        const int old = static_cast<int>(SendMessageW(Control(AppList), CB_GETCURSEL, 0, 0));
-        const auto previous = old >= 0 && old < static_cast<int>(appKeys.size()) ? appKeys[old] : L"";
-        appSignature = signature; appKeys.clear(); SendMessageW(Control(AppList), CB_RESETCONTENT, 0, 0); int selected = 0;
-        for (const auto& [key, name] : apps) {
-            if (key == previous) selected = static_cast<int>(appKeys.size());
-            appKeys.push_back(key); SendMessageW(Control(AppList), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name.c_str()));
-        }
-        if (appKeys.empty()) SendMessageW(Control(AppList), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"No applications here — play audio on this input first"));
-        SendMessageW(Control(AppList), CB_SETCURSEL, selected, 0);
-    }
-    EnableWindow(Control(AddApp), view.edition > 0 && !appKeys.empty());
     const auto oldSelection = Selected();
+    const int topIndex = ListView_GetTopIndex(Control(Rows));
+    const auto topId = topIndex >= 0 && topIndex < static_cast<int>(visible.size()) ? visible[topIndex] : 0;
     std::vector<uint64_t> next;
-    for (const auto& r : view.rows) if (r.mapping.route == route) next.push_back(r.mapping.id);
+    for (const auto& r : view.rows) if (RouteAvailable(route, view.edition) && r.mapping.route == route && !r.target.instances.empty()) next.push_back(r.mapping.id);
+    Set(Control(AppLabel), view.edition == 0 ? L"Connect VoiceMeeter in the main window to detect its inputs." : next.empty() ?
+        std::wstring(RouteName(route)) + L" — No applications connected. Start playback on this input; the list updates automatically." :
+        std::wstring(RouteName(route)) + L" — Tick Use for the apps you want to control, then select a row and Learn. All input pages run together.");
     if (next != visible) {
         uint64_t selection = oldSelection;
         if (std::find(next.begin(), next.end(), oldSelection) == next.end()) selection = next.empty() ? 0 : next.front();
-        else if (next.size() > visible.size()) for (const auto id : next) if (std::find(visible.begin(), visible.end(), id) == visible.end()) { selection = id; break; }
         visible = std::move(next); ListView_DeleteAllItems(Control(Rows));
         for (size_t i = 0; i < visible.size(); ++i) {
             LVITEMW item{}; item.mask = LVIF_TEXT; item.iItem = static_cast<int>(i); item.pszText = const_cast<LPWSTR>(L""); ListView_InsertItem(Control(Rows), &item);
             if (visible[i] == selection) ListView_SetItemState(Control(Rows), static_cast<int>(i), LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+        const auto top = std::find(visible.begin(), visible.end(), topId);
+        if (top != visible.end()) {
+            RECT item{};
+            if (ListView_GetItemRect(Control(Rows), 0, &item, LVIR_BOUNDS))
+                ListView_Scroll(Control(Rows), 0, static_cast<int>(top - visible.begin()) * (item.bottom - item.top));
         }
     }
     for (size_t i = 0; i < visible.size(); ++i) {
@@ -196,9 +188,9 @@ void Window::Render() {
         }
     }
     const auto selected = Selected(); const auto row = std::find_if(view.rows.begin(), view.rows.end(), [&](const Row& r) { return r.mapping.id == selected; });
-    for (auto id : {Learn, Mode, Remove}) EnableWindow(Control(id), selected != 0);
+    for (auto id : {Learn, Mode, Remove, AddApp}) if ((IsWindowEnabled(Control(id)) != FALSE) != (selected != 0)) EnableWindow(Control(id), selected != 0);
     if (row != view.rows.end()) {
-        SendMessageW(Control(Mode), CB_SETCURSEL, static_cast<int>(row->mapping.action), 0);
+        if (!SendMessageW(Control(Mode), CB_GETDROPPEDSTATE, 0, 0)) SendMessageW(Control(Mode), CB_SETCURSEL, static_cast<int>(row->mapping.action), 0);
         const auto endpoint = std::find_if(view.endpoints.begin(), view.endpoints.end(), [&](const Endpoint& e) { return e.id == row->mapping.endpoint; });
         Set(Control(SelectionHint), row->mapping.name + L"  /  " + (endpoint == view.endpoints.end() ? L"Saved endpoint offline" : endpoint->name));
     } else Set(Control(SelectionHint), L"Select a row to learn or change its action. All input pages run together.");
@@ -214,20 +206,15 @@ void Window::Command(int id, int code) {
     apps::Command command{Operation::Stop}; command.row = Selected();
     if (code == CBN_SELCHANGE) {
         const int selected = static_cast<int>(SendMessageW(Control(id), CB_GETCURSEL, 0, 0));
-        if (id == EndpointList && selected >= 0 && selected < static_cast<int>(endpointKeys.size())) {
-            command.operation = Operation::Endpoint; command.route = route; command.key = endpointKeys[selected];
-        } else if (id == Mode) { command.operation = Operation::Mode; command.value = selected; }
+        if (id == Mode) { command.operation = Operation::Mode; command.value = selected; }
         else if (id == ToleranceList) { command.operation = Operation::Tolerance; command.value = selected; }
         else return;
     } else if (code == BN_CLICKED) {
-        if (id >= Vaio && id <= Vaio3) { route = id - Vaio; Render(); return; }
+        if (id >= Vaio && id <= In5) { route = id - Vaio; for (int i = 0; i < RouteCount; ++i) InvalidateRect(Control(Vaio + i), nullptr, TRUE); Render(); return; }
         if (id == Close) { ShowWindow(window, SW_HIDE); return; }
         switch (id) {
-        case AddApp: {
-            const int selected = static_cast<int>(SendMessageW(Control(AppList), CB_GETCURSEL, 0, 0));
-            if (selected < 0 || selected >= static_cast<int>(appKeys.size())) return;
-            command.operation = Operation::Add; command.route = route; command.key = appKeys[selected]; break;
-        }
+        case AddApp: command.operation = Operation::Add; break;
+        case Refresh: command.operation = Operation::Refresh; break;
         case Learn: command.operation = Operation::Learn; break;
         case Remove: command.operation = Operation::Remove; break;
         case Start: command.operation = Operation::Start; break;
@@ -244,12 +231,13 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
     switch (message) {
     case WM_CREATE: {
         Add(L"STATIC", L"Application MIDI Control", SS_LEFT, Title); Add(L"STATIC", L"PREVIEW", SS_LEFT, Subtitle);
-        for (const auto& [id, name] : {std::pair{Vaio, L"VAIO"}, {Aux, L"AUX"}, {Vaio3, L"VAIO 3"}, {AddApp, L"Add application"}, {Learn, L"Learn selected"},
-            {Remove, L"Remove row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}})
+        for (int i = 0; i < RouteCount; ++i) Add(L"BUTTON", RouteName(i), BS_OWNERDRAW | WS_TABSTOP, Vaio + i);
+        for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
+            {Remove, L"Clear MIDI"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}})
             Add(L"BUTTON", name, BS_OWNERDRAW | WS_TABSTOP, id);
-        Add(L"STATIC", L"Playback endpoint", SS_LEFT, EndpointLabel); Add(L"STATIC", L"Connected apps", SS_LEFT, AppLabel);
+        Add(L"STATIC", L"Connected apps appear automatically. Tick Use, select a row, then Learn.", SS_LEFT, AppLabel);
         Add(L"STATIC", L"Tolerance", SS_LEFT, ToleranceLabel); Add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, SelectionHint); Add(L"STATIC", L"", SS_LEFT, Status);
-        for (auto id : {EndpointList, AppList, Mode, ToleranceList}) Add(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, id);
+        for (auto id : {Mode, ToleranceList}) Add(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, id);
         for (int i = 0; i < 4; ++i) {
             SendMessageW(Control(Mode), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(ActionName(static_cast<Action>(i))));
             const auto label = std::to_wstring(i) + L" MIDI steps"; SendMessageW(Control(ToleranceList), CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
@@ -303,7 +291,11 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
     case WM_DRAWITEM: {
         const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(l); if (draw->CtlType != ODT_BUTTON) break;
         const int id = static_cast<int>(draw->CtlID); const bool selected = (id == Vaio + route || id == Start) && !(draw->itemState & ODS_DISABLED);
-        const auto brush = CreateSolidBrush((draw->itemState & ODS_SELECTED) ? RGB(101, 74, 54) : selected ? Amber : Field); FillRect(draw->hDC, &draw->rcItem, brush); DeleteObject(brush);
+        FillRect(draw->hDC, &draw->rcItem, background);
+        const auto brush = CreateSolidBrush((draw->itemState & ODS_SELECTED) ? RGB(101, 74, 54) : selected ? Amber : Field);
+        const auto previousBrush = SelectObject(draw->hDC, brush), previousPen = SelectObject(draw->hDC, GetStockObject(NULL_PEN));
+        RoundRect(draw->hDC, draw->rcItem.left, draw->rcItem.top, draw->rcItem.right, draw->rcItem.bottom, Scale(10), Scale(10));
+        SelectObject(draw->hDC, previousBrush); SelectObject(draw->hDC, previousPen); DeleteObject(brush);
         SetBkMode(draw->hDC, TRANSPARENT); SetTextColor(draw->hDC, (draw->itemState & ODS_DISABLED) ? Muted : selected ? Back : Ink); SelectObject(draw->hDC, font);
         wchar_t text[128]{}; GetWindowTextW(draw->hwndItem, text, 128); RECT rect = draw->rcItem;
         DrawTextW(draw->hDC, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE); if (draw->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(draw->hDC, &rect); } return TRUE;

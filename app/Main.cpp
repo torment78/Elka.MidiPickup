@@ -4,6 +4,7 @@
 #include "resource.h"
 #include "Version.h"
 #include "ApplicationWindow.h"
+#include "ControlLayout.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <CommCtrl.h>
@@ -61,6 +62,7 @@ private:
     std::wstring savedInput;
     std::array<HFONT, 3> fonts{};
     std::vector<Placement> placements;
+    elka::ControlLayout controlLayout;
     std::vector<elka::MidiPort> ports;
     std::array<Row, 16> rows;
     std::array<Mapping, 16> beforeDemo{};
@@ -93,6 +95,8 @@ private:
     static LRESULT CALLBACK DarkControl(HWND control, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR context) {
         auto& app = *reinterpret_cast<Application*>(context);
         if (message == WM_NCDESTROY) RemoveWindowSubclass(control, DarkControl, id);
+        if (message == WM_MOUSEWHEEL && id == 2 && !SendMessageW(control, CB_GETDROPPEDSTATE, 0, 0))
+            return SendMessageW(app.window, message, w, l);
         if (message == WM_PAINT && id == 1) {
             PAINTSTRUCT paint{}; const auto dc = BeginPaint(control, &paint); RECT rect{}; GetClientRect(control, &rect);
             app.PaintButton(control, dc, rect, (SendMessageW(control, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0, GetFocus() == control, true);
@@ -140,9 +144,9 @@ private:
         SetScrollInfo(window, SB_VERT, &info, TRUE);
         GetScrollInfo(window, SB_VERT, &info); scroll = info.nPos;
         const double horizontal = static_cast<double>(area.right) / 980.0;
-        for (const auto& p : placements) MoveWindow(p.control, static_cast<int>(p.x * horizontal), S(p.y) - scroll,
-            static_cast<int>(p.width * horizontal), S(p.height), TRUE);
-        InvalidateRect(window, nullptr, TRUE);
+        for (const auto& p : placements) controlLayout.Place(p.control, static_cast<int>(p.x * horizontal), S(p.y) - scroll,
+            static_cast<int>(p.width * horizontal), S(p.height));
+        controlLayout.Finish(window);
     }
     void CreateControls() {
         Label(L"Elka MIDI Pickup", 1, 24, 14, 600, 38, 1);
@@ -203,7 +207,13 @@ private:
         Label(L"", Counts, 24, 638, 930);
         Label(notice, Hint, 24, 673, 645, 46);
         Button(L"♥  Donate on Ko-fi", Donate, 699, 676, 255);
-        Fonts(); RefreshPorts();
+        Fonts();
+#ifdef ELKA_UI_INSPECTION
+        // Test executable only: exercise the real layout without devices,
+        // profiles, registry changes, tray registration, or processing.
+        SelectPage(0); Render(); Layout(); return;
+#else
+        RefreshPorts();
         wchar_t path[32768]{}; GetModuleFileNameW(nullptr, path, 32768);
         profile = std::filesystem::path(path).parent_path() / L"Elka.MidiPickup.ini";
         diagnosticPath = std::filesystem::path(path).parent_path() / L"Elka.MidiPickup.log";
@@ -229,6 +239,7 @@ private:
             }
         });
         SelectPage(0); Render(); Layout();
+#endif
     }
     void Log(const std::wstring& text) {
         if (diagnosticPath.empty()) return;
@@ -545,7 +556,7 @@ private:
     void SelectPage(int selected) {
         page = selected;
         for (const auto& p : placements) ShowWindow(p.control, p.page < 0 || p.page == page ? SW_SHOW : SW_HIDE);
-        for (auto id : {StripTab, BusTab, SettingsTab}) InvalidateRect(C(id), nullptr, TRUE);
+        RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     }
     void PaintButton(HWND control, HDC dc, RECT rect, bool pressed, bool focused, bool checkbox) {
         const int id = GetDlgCtrlID(control);
@@ -553,7 +564,15 @@ private:
         const bool selected = (id >= StripTab && id <= SettingsTab && id - StripTab == page);
         const auto fill = checkbox ? Back : id == Donate ? Orange : selected || id == Start ? Accent : Panel;
         const auto brush = CreateSolidBrush(pressed ? RGB(51,65,74) : fill);
-        FillRect(dc, &rect, brush); DeleteObject(brush);
+        if (checkbox) FillRect(dc, &rect, brush);
+        else {
+            FillRect(dc, &rect, background);
+            const auto pen = CreatePen(PS_SOLID, 1, selected ? Accent : RGB(51,65,74));
+            const auto oldBrush = SelectObject(dc, brush), oldPen = SelectObject(dc, pen);
+            RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(10), S(10));
+            SelectObject(dc, oldBrush); SelectObject(dc, oldPen); DeleteObject(pen);
+        }
+        DeleteObject(brush);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, !enabled ? Muted : id == Donate || selected || id == Start ? Back : Ink);
         SelectObject(dc, fonts[0]);
@@ -565,8 +584,6 @@ private:
             DeleteObject(mark);
             if (Checked(control)) { SetTextColor(dc, Back); DrawTextW(dc, L"\u2713", -1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE); }
             SetTextColor(dc, enabled ? Ink : Muted); rect.left += S(24);
-        } else {
-            const auto border = CreateSolidBrush(selected ? Accent : RGB(51,65,74)); FrameRect(dc, &rect, border); DeleteObject(border);
         }
         auto text = Text(control);
         DrawTextW(dc, text.c_str(), -1, &rect, (checkbox ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -722,6 +739,9 @@ public:
     bool StartHidden() const { return !forceWindow && trayAdded && (forceTray || savedSetup.launchTray); }
     ~Application() { worker.request_stop(); workerWake.notify_all(); if (worker.joinable()) worker.join(); appControl.Shutdown(); midi.Close(); vm.Close(); for (auto f : fonts) if (f) DeleteObject(f); DeleteObject(background); DeleteObject(fieldBrush); }
     LRESULT Handle(UINT message, WPARAM w, LPARAM l) {
+#ifdef ELKA_UI_INSPECTION
+        if (message == WM_COMMAND && LOWORD(w) != StripTab && LOWORD(w) != BusTab && LOWORD(w) != SettingsTab && LOWORD(w) != Exit) return 0;
+#endif
         // Creating the preview window must not hold up strip/bus processing.
         if (message == WM_COMMAND && LOWORD(w) == Applications && HIWORD(w) == BN_CLICKED) {
             appControl.Launch(profile.parent_path() / L"Elka.MidiPickup.applications");
@@ -854,10 +874,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM w, LPARAM l) 
 }
 }
 
+#ifdef ELKA_UI_INSPECTION
+int MainWindowPreview() {
+    const HINSTANCE instance = GetModuleHandleW(nullptr); const auto arguments = L"--show"; const int show = SW_SHOW;
+    constexpr auto windowClass = L"ElkaMidiPickupUiInspection", mutexName = L"Local\\ElkaMidiPickupUiInspection";
+#else
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
-    const HANDLE singleInstance = CreateMutexW(nullptr, FALSE, L"Local\\ElkaMidiPickupTestApp");
+    constexpr auto windowClass = L"ElkaMidiPickupTestWindow", mutexName = L"Local\\ElkaMidiPickupTestApp";
+#endif
+    const HANDLE singleInstance = CreateMutexW(nullptr, FALSE, mutexName);
     if (singleInstance && GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (const auto existing = FindWindowW(L"ElkaMidiPickupTestWindow", nullptr)) {
+        if (const auto existing = FindWindowW(windowClass, nullptr)) {
             ShowWindow(existing, IsIconic(existing) ? SW_RESTORE : SW_SHOW); SetForegroundWindow(existing);
         }
         CloseHandle(singleInstance); return 0;
@@ -865,7 +892,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&controls);
     Application application(instance, arguments ? arguments : L"");
     WNDCLASSEXW type{sizeof(type)}; type.hInstance = instance; type.lpfnWndProc = WindowProcedure;
-    type.lpszClassName = L"ElkaMidiPickupTestWindow"; type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    type.lpszClassName = windowClass; type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     type.hIcon = AppIcon(instance, GetSystemMetrics(SM_CXICON)); type.hIconSm = AppIcon(instance, GetSystemMetrics(SM_CXSMICON));
     RegisterClassExW(&type);
     RECT work{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
@@ -879,6 +906,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
     const COLORREF caption = Back, captionText = Ink;
     DwmSetWindowAttribute(window, 35, &caption, sizeof(caption)); DwmSetWindowAttribute(window, 36, &captionText, sizeof(captionText));
     ShowWindow(window, application.StartHidden() ? SW_HIDE : show); UpdateWindow(window);
+#ifdef ELKA_UI_INSPECTION
+    SetWindowTextW(window, L"Elka MIDI Pickup — UI inspection (no connections)"); ShowWindow(window, SW_SHOW);
+#endif
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) if (!application.Dialog(message) && !IsDialogMessageW(window, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
     if (singleInstance) CloseHandle(singleInstance);

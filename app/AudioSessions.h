@@ -45,9 +45,11 @@ class AudioSessions {
         ~Device() { if (manager && notifications) manager->UnregisterSessionNotification(notifications.Get()); }
     };
     struct Live {
+        struct CloseProcess { void operator()(void* handle) const { if (handle) CloseHandle(handle); } };
         Session info;
         ComPtr<IAudioSessionControl2> control;
         ComPtr<ISimpleAudioVolume> volume;
+        std::unique_ptr<void, CloseProcess> process;
     };
     std::map<std::wstring, std::unique_ptr<Device>> devices;
     std::map<std::wstring, Live> live;
@@ -60,19 +62,11 @@ class AudioSessions {
         if (SUCCEEDED(store->GetValue(key, &value)) && value.vt == VT_LPWSTR && value.pwszVal) result = value.pwszVal;
         PropVariantClear(&value); return result;
     }
-    static int Route(const std::wstring& label) {
-        const auto name = Lower(label);
-        if (name.find(L"voicemeeter") == std::wstring::npos) return -1;
-        if (name.starts_with(L"voicemeeter vaio3 input")) return 2;
-        if (name.starts_with(L"voicemeeter aux input")) return 1;
-        if (name.starts_with(L"voicemeeter input")) return 0;
-        // In 1..5 are separate endpoints in the newer driver and can be
-        // remapped in VoiceMeeter's Audio Map. Never guess their destination.
-        return -1;
-    }
     void Add(const Endpoint& device, IAudioSessionControl* session) {
         Live item; item.info.endpoint = device.id;
         if (FAILED(session->QueryInterface(IID_PPV_ARGS(&item.control))) || FAILED(session->QueryInterface(IID_PPV_ARGS(&item.volume)))) return;
+        AudioSessionState state{};
+        if (FAILED(item.control->GetState(&state)) || state == AudioSessionStateExpired) return;
         LPWSTR raw{};
         if (FAILED(item.control->GetSessionInstanceIdentifier(&raw)) || !raw) return;
         item.info.instance = raw; CoTaskMemFree(raw);
@@ -84,10 +78,10 @@ class AudioSessions {
         if (item.control->IsSystemSoundsSession() == S_OK) { item.info.appKey = L"system-sounds"; item.info.name = L"System sounds"; }
         else {
             if (!pid) return;
-            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-            if (!process) return;
+            item.process.reset(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
+            if (!item.process || WaitForSingleObject(item.process.get(), 0) != WAIT_TIMEOUT) return;
             wchar_t path[32768]{}; DWORD size = static_cast<DWORD>(std::size(path));
-            const bool read = QueryFullProcessImageNameW(process, 0, path, &size) != FALSE; CloseHandle(process);
+            const bool read = QueryFullProcessImageNameW(item.process.get(), 0, path, &size) != FALSE;
             if (!read) return;
             item.info.appKey = Lower(path);
             item.info.name = std::filesystem::path(path).stem().wstring();
@@ -129,7 +123,7 @@ public:
             }
             auto device = std::make_unique<Device>();
             device->info = {id, name, -1, voiceMeeter};
-            device->info.route = Route(device->info.name);
+            device->info.route = EndpointRoute(device->info.name);
             if (FAILED(endpoint->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(device->manager.GetAddressOf())))) continue;
             device->notifications.Attach(new Notifications());
             if (FAILED(device->manager->RegisterSessionNotification(device->notifications.Get()))) continue;
@@ -146,12 +140,17 @@ public:
     std::vector<Endpoint> Endpoints() const {
         std::vector<Endpoint> result; for (const auto& [id, d] : devices) { (void)id; result.push_back(d->info); } return result;
     }
+    void Refresh() {
+        // Release our references to stale sessions. This does not restart
+        // Windows audio, alter routing, or reset another app's mixer cache.
+        live.clear(); devices.clear(); enumerator.Reset(); Discover();
+    }
     std::vector<Session> Read() {
         for (const auto& [id, device] : devices) { (void)id; for (const auto& control : device->notifications->Drain()) Add(device->info, control.Get()); }
         std::vector<Session> result;
         for (auto it = live.begin(); it != live.end();) {
             auto& s = it->second; AudioSessionState state{};
-            if (FAILED(s.control->GetState(&state)) || state == AudioSessionStateExpired) { it = live.erase(it); continue; }
+            if ((s.process && WaitForSingleObject(s.process.get(), 0) != WAIT_TIMEOUT) || FAILED(s.control->GetState(&state)) || state == AudioSessionStateExpired) { it = live.erase(it); continue; }
             float gain{}; BOOL mute{};
             s.info.readable = SUCCEEDED(s.volume->GetMasterVolume(&gain)) && SUCCEEDED(s.volume->GetMute(&mute));
             s.info.volume = gain; s.info.muted = mute != FALSE;

@@ -30,6 +30,26 @@ inline int Delta(Action action, int value) {
     return 0;
 }
 struct Endpoint { std::wstring id, name; int route{-1}; bool voiceMeeter{}; };
+inline constexpr int RouteCount = 8;
+inline bool RouteAvailable(int route, int edition) {
+    if (edition < 1 || edition > 3 || route < 0 || route >= RouteCount) return false;
+    return route < 3 ? route < edition : route - 3 < (edition == 3 ? 5 : edition == 2 ? 3 : 2);
+}
+inline const wchar_t* RouteName(int route) {
+    constexpr const wchar_t* names[] = {L"VAIO", L"AUX", L"VAIO 3", L"In 1", L"In 2", L"In 3", L"In 4", L"In 5"};
+    return route >= 0 && route < RouteCount ? names[route] : L"Unknown input";
+}
+inline int EndpointRoute(const std::wstring& label) {
+    const auto name = Lower(label);
+    if (name.starts_with(L"voicemeeter vaio3 input")) return 2;
+    if (name.starts_with(L"voicemeeter aux input")) return 1;
+    if (name.starts_with(L"voicemeeter input")) return 0;
+    for (int i = 1; i <= 5; ++i) {
+        const auto prefix = L"voicemeeter in " + std::to_wstring(i);
+        if (name == prefix || name.starts_with(prefix + L" ")) return i + 2;
+    }
+    return -1;
+}
 struct Session {
     std::wstring endpoint, appKey, name, instance;
     double volume{};
@@ -107,5 +127,25 @@ inline bool Conflict(const Source& source, const std::vector<Source>& reserved, 
 }
 inline bool SameTarget(const Mapping& a, const Mapping& b) {
     return a.endpoint == b.endpoint && a.appKey == b.appKey && (a.action == Action::Mute) == (b.action == Action::Mute);
+}
+inline bool Configured(const Mapping& m) { return m.use || m.source.Valid() || m.action != Action::Volume; }
+// Reconcile by endpoint + executable, never by row order. Configured offline
+// rows remain in the model/profile; the window shows only present sessions.
+inline void SyncApplications(std::vector<Row>& rows, const std::vector<Endpoint>& endpoints, const std::vector<Session>& sessions, int edition, uint64_t& nextId) {
+    std::erase_if(rows, [&](const Row& r) {
+        return !Configured(r.mapping) && std::none_of(sessions.begin(), sessions.end(), [&](const Session& s) { return s.endpoint == r.mapping.endpoint && s.appKey == r.mapping.appKey; });
+    });
+    for (auto& row : rows) {
+        const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [&](const Endpoint& e) { return e.id == row.mapping.endpoint; });
+        // Migrates old manually chosen endpoints without retargeting audio.
+        if (endpoint != endpoints.end()) row.mapping.route = endpoint->route;
+    }
+    for (const auto& s : sessions) {
+        const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [&](const Endpoint& e) { return e.id == s.endpoint && e.voiceMeeter && RouteAvailable(e.route, edition); });
+        if (endpoint == endpoints.end()) continue;
+        if (std::any_of(rows.begin(), rows.end(), [&](const Row& r) { return r.mapping.endpoint == s.endpoint && r.mapping.appKey == s.appKey; })) continue;
+        Row row; row.mapping = {nextId++, endpoint->route, s.endpoint, s.appKey, s.name, {}, Action::Volume, false};
+        rows.push_back(std::move(row));
+    }
 }
 }

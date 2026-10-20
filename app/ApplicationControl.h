@@ -8,7 +8,7 @@
 #include <atomic>
 
 namespace elka::apps {
-enum class Operation { Add, Remove, Learn, Use, Mode, Endpoint, Start, Stop, Rearm, Save, Confirm, Tolerance };
+enum class Operation { Add, Remove, Learn, Use, Mode, Endpoint, Start, Stop, Rearm, Save, Confirm, Tolerance, Refresh };
 struct Command {
     Operation operation;
     uint64_t row{};
@@ -19,7 +19,7 @@ struct View {
     std::vector<Endpoint> endpoints;
     std::vector<Session> sessions;
     std::vector<Row> rows;
-    std::array<std::wstring, 3> selected;
+    std::array<std::wstring, RouteCount> selected;
     std::wstring notice = L"Connect MIDI and VoiceMeeter in the main window. Application control starts stopped.";
     bool active{}, connected{}, confirmed{}, dirty{};
     int edition{}, tolerance{3};

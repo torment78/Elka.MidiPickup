@@ -52,15 +52,16 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
             lastTick = now;
             if (now >= discoverAt) {
                 audio.Discover(); state.endpoints = audio.Endpoints(); discoverAt = now + 2000;
-                for (int route = 0; route < 3; ++route) if (state.selected[route].empty()) {
+                for (int route = 0; route < RouteCount; ++route) {
                     std::vector<Endpoint> matches;
                     for (const auto& endpoint : state.endpoints) if (endpoint.route == route) matches.push_back(endpoint);
-                    if (matches.size() == 1) state.selected[route] = matches.front().id;
+                    state.selected[route] = matches.size() == 1 ? matches.front().id : L"";
                 }
             }
             state.sessions = audio.Read();
+            SyncApplications(state.rows, state.endpoints, state.sessions, state.edition, nextId);
             auto reconcile = [&] { for (auto& row : state.rows) {
-                const bool conflict = Conflict(row.mapping.source, current.reserved, state.rows, row.mapping.id) || row.mapping.route >= state.edition ||
+                const bool conflict = Conflict(row.mapping.source, current.reserved, state.rows, row.mapping.id) || !RouteAvailable(row.mapping.route, state.edition) ||
                     std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& other) { return other.mapping.id != row.mapping.id && other.mapping.use && SameTarget(row.mapping, other.mapping); });
                 if (conflict != row.blocked) row.Reset();
                 row.blocked = conflict;
@@ -68,28 +69,39 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 row.Observe(Resolve(state.sessions, row.mapping.endpoint, row.mapping.appKey), now);
             } };
             reconcile();
+            if (state.learning && std::none_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.id == state.learning && r.target.ready; })) {
+                halt(); state.notice = L"Learn cancelled because that application disconnected. Its saved assignment is retained.";
+            }
             for (const auto& command : pending) {
                 auto found = std::find_if(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.id == command.row; });
                 Row* row = found == state.rows.end() ? nullptr : &*found;
+                if (row && !Configured(row->mapping) &&
+                    (command.operation == Operation::Learn || command.operation == Operation::Mode || (command.operation == Operation::Use && command.value)) &&
+                    std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping); }) >= 128) {
+                    state.notice = L"Save up to 128 application controls. Clear an unused assignment first."; continue;
+                }
                 switch (command.operation) {
                 case Operation::Endpoint:
-                    if (command.route < 0 || command.route >= state.edition) break;
-                    if (std::none_of(state.endpoints.begin(), state.endpoints.end(), [&](const Endpoint& e) { return e.id == command.key; })) break;
+                    if (!RouteAvailable(command.route, state.edition)) break;
+                    if (std::none_of(state.endpoints.begin(), state.endpoints.end(), [&](const Endpoint& e) { return e.id == command.key && e.route == command.route; })) break;
                     // Existing mappings retain their explicit endpoint identity.
                     state.selected[command.route] = command.key; state.dirty = true; break;
                 case Operation::Add: {
-                    if (command.route < 0 || command.route >= state.edition || state.rows.size() >= 128) break;
-                    const auto& endpoint = state.selected[command.route];
-                    const auto app = std::find_if(state.sessions.begin(), state.sessions.end(), [&](const Session& s) { return s.endpoint == endpoint && s.appKey == command.key; });
+                    const int route = row ? row->mapping.route : command.route;
+                    if (!RouteAvailable(route, state.edition)) break;
+                    if (std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping); }) >= 128) { state.notice = L"Save up to 128 application controls."; break; }
+                    const auto endpoint = row ? row->mapping.endpoint : state.selected[route];
+                    const auto key = row ? row->mapping.appKey : command.key;
+                    const auto app = std::find_if(state.sessions.begin(), state.sessions.end(), [&](const Session& s) { return s.endpoint == endpoint && s.appKey == key; });
                     if (app == state.sessions.end()) { state.notice = L"That application is no longer connected. Start playback and refresh the list."; break; }
-                    Row added; added.mapping = {nextId++, command.route, endpoint, app->appKey, app->name, {}, Action::Volume, true};
+                    Row added; added.mapping = {nextId++, route, endpoint, app->appKey, app->name, {}, Action::Volume, false};
                     if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) {
                         // Allow a second row for a separate mute button.
                         added.mapping.action = Action::Mute;
                         if (std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return SameTarget(r.mapping, added.mapping); })) { state.notice = L"This app already has volume and mute rows."; break; }
                     }
                     halt(); state.rows.push_back(std::move(added)); state.confirmed = false; state.dirty = true;
-                    state.notice = L"Application added. Select its row, choose the action, then Learn."; break;
+                    state.notice = L"Extra control added. Tick Use, select its row, then Learn."; break;
                 }
                 case Operation::Remove:
                     if (row) { halt(); state.rows.erase(found); state.dirty = true; } break;
@@ -101,7 +113,9 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                     } else state.notice = L"Connect MIDI and VoiceMeeter before learning.";
                     break;
                 case Operation::Use:
-                    if (row) { halt(); row->mapping.use = command.value != 0; row->failed = false; state.dirty = true; } break;
+                    if (row) {
+                        halt(); row->mapping.use = command.value != 0; row->failed = false; state.dirty = true;
+                    } break;
                 case Operation::Mode:
                     if (row && command.value >= 0 && command.value <= 3) {
                         halt(); row->mapping.action = static_cast<Action>(command.value);
@@ -112,9 +126,9 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                     halt();
                     if (!state.connected) { state.notice = L"Connect MIDI and VoiceMeeter in the main window first."; break; }
                     if (!state.confirmed) { state.notice = L"Disable the new controls' duplicate mappings, then tick the confirmation."; break; }
-                    const bool any = std::any_of(state.rows.begin(), state.rows.end(), [](const Row& r) { return r.mapping.use && r.mapping.source.Valid(); });
+                    const bool any = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.use && r.mapping.source.Valid() && RouteAvailable(r.mapping.route, state.edition); });
                     const bool invalid = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) {
-                        return r.mapping.use && (!r.mapping.source.Valid() || Conflict(r.mapping.source, current.reserved, state.rows, r.mapping.id) || r.blocked);
+                        return r.mapping.use && RouteAvailable(r.mapping.route, state.edition) && (!r.mapping.source.Valid() || Conflict(r.mapping.source, current.reserved, state.rows, r.mapping.id) || r.blocked);
                     });
                     if (!any || invalid) { state.notice = L"Learn each enabled row and resolve duplicate MIDI sources or application targets. Strip/bus controls are reserved."; break; }
                     for (auto& r : state.rows) r.failed = false;
@@ -124,9 +138,13 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 case Operation::Rearm: reset(); for (auto& r : state.rows) r.failed = false; state.notice = L"Applications re-armed. Move each fader toward its current volume."; break;
                 case Operation::Confirm: state.confirmed = command.value != 0; if (!state.confirmed) halt(); break;
                 case Operation::Tolerance: state.tolerance = std::clamp(command.value, 0, 3); state.dirty = true; break;
+                case Operation::Refresh:
+                    reset(); audio.Refresh(); state.endpoints = audio.Endpoints(); state.sessions = audio.Read(); discoverAt = 0;
+                    SyncApplications(state.rows, state.endpoints, state.sessions, state.edition, nextId);
+                    state.notice = L"Application list refreshed. Closed apps are hidden; saved assignments return with them. Faders re-armed."; break;
                 case Operation::Save: {
                     Setup setup; setup.endpoints = state.selected; setup.tolerance = state.tolerance;
-                    for (const auto& r : state.rows) setup.mappings.push_back(r.mapping);
+                    for (const auto& r : state.rows) if (Configured(r.mapping)) setup.mappings.push_back(r.mapping);
                     if (SaveApplicationSetup(path, setup)) { state.dirty = false; state.notice = L"Application setup saved separately. This preview always starts stopped."; }
                     else state.notice = L"Could not save application setup beside the executable.";
                     break;

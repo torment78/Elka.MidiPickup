@@ -1,5 +1,6 @@
 #pragma once
 #include "ApplicationControl.h"
+#include "ControlLayout.h"
 #include <CommCtrl.h>
 
 namespace elka::apps {
@@ -13,8 +14,7 @@ class Window {
     bool rendering{};
     View view;
     std::vector<uint64_t> visible;
-    std::vector<std::wstring> endpointKeys, appKeys;
-    std::wstring endpointSignature, appSignature;
+    elka::ControlLayout controlLayout;
     HWND Control(int id) const { return GetDlgItem(window, id); }
     int Scale(int v) const { return MulDiv(v, dpi, 96); }
     HWND Add(const wchar_t* type, const wchar_t* text, DWORD style, int id);

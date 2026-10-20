@@ -37,7 +37,7 @@
     <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>winmm.lib;comctl32.lib;shell32.lib;advapi32.lib;dwmapi.lib;uxtheme.lib;ole32.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies><GenerateDebugInformation>true</GenerateDebugInformation></Link>
     <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="Main.cpp" /><ClInclude Include="Devices.h" /><ClInclude Include="Profile.h" /><ClInclude Include="MidiInbox.h" /><ClInclude Include="Pickup.h" /><Manifest Include="app.manifest" /></ItemGroup>
+  <ItemGroup><ClCompile Include="Main.cpp" /><ClInclude Include="ControlLayout.h" /><ClInclude Include="Devices.h" /><ClInclude Include="Profile.h" /><ClInclude Include="MidiInbox.h" /><ClInclude Include="Pickup.h" /><Manifest Include="app.manifest" /></ItemGroup>
   <ItemGroup><ClCompile Include="ApplicationControl.cpp" /><ClCompile Include="ApplicationWindow.cpp" /><ClInclude Include="ApplicationMidi.h" /><ClInclude Include="ApplicationProfile.h" /><ClInclude Include="AudioSessions.h" /><ClInclude Include="ApplicationControl.h" /><ClInclude Include="ApplicationWindow.h" /></ItemGroup>
   <ItemGroup><ResourceCompile Include="App.rc" /><ClInclude Include="resource.h" /><ClInclude Include="Version.h" /><Image Include="Assets\Elka.MidiPickup.ico" /><Image Include="Assets\Elka.MidiPickup.png" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -153,7 +153,10 @@ void ProfileTests() {
     Check(elka::LoadProfile(path, loaded) && !loaded.mappings[0].use && !loaded.confirmed, "invalid cross-page target cannot silently control a different fader");
     std::filesystem::remove(path);
 }
+int MainWindowPreview();
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--preview-main") return MainWindowPreview();
+    if (argc == 5 && std::string(argv[1]) == "--session-child") return SessionChild(argv[2], argv[3], argv[4]);
     if (argc > 1 && std::string(argv[1]) == "--preview-window") return ApplicationPreview();
     if (argc > 1 && std::string(argv[1]) == "--inspect-audio") return InspectAudioSessions(false);
     if (argc > 1 && std::string(argv[1]) == "--audio-integration") return InspectAudioSessions(true);
