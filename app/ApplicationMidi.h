@@ -30,10 +30,10 @@ inline int Delta(Action action, int value) {
     return 0;
 }
 struct Endpoint { std::wstring id, name; int route{-1}; bool voiceMeeter{}; };
-inline constexpr int RouteCount = 8;
+inline constexpr int RouteCount = 8; // Keep preview.2 endpoint/profile slots readable.
+inline constexpr int InputCount = 3; // Application control is limited to VAIO, AUX, VAIO 3.
 inline bool RouteAvailable(int route, int edition) {
-    if (edition < 1 || edition > 3 || route < 0 || route >= RouteCount) return false;
-    return route < 3 ? route < edition : route - 3 < (edition == 3 ? 5 : edition == 2 ? 3 : 2);
+    return edition >= 1 && edition <= 3 && route >= 0 && route < InputCount && route < edition;
 }
 inline const wchar_t* RouteName(int route) {
     constexpr const wchar_t* names[] = {L"VAIO", L"AUX", L"VAIO 3", L"In 1", L"In 2", L"In 3", L"In 4", L"In 5"};
@@ -80,6 +80,8 @@ struct Mapping {
     Source source;
     Action action{Action::Volume};
     bool use{true};
+    bool hidden{};
+    bool Enabled() const { return use && !hidden && route >= 0 && route < InputCount; }
 };
 struct Row {
     Mapping mapping;
@@ -102,9 +104,9 @@ struct Row {
     }
     bool Ready() const { return target.ready && !blocked && !failed && (mapping.action == Action::Mute ? !target.mixedMute : !target.mixedVolume); }
     void Input(int value, bool active) {
-        if (mapping.action == Action::Volume) { pickup.Input(value, active && mapping.use && Ready()); return; }
+        if (mapping.action == Action::Volume) { pickup.Input(value, active && mapping.Enabled() && Ready()); return; }
         pickup.hardware = value;
-        if (!active || !mapping.use || !Ready()) { down = false; releaseRequired = true; return; }
+        if (!active || !mapping.Enabled() || !Ready()) { down = false; releaseRequired = true; return; }
         if (mapping.action == Action::Mute) {
             const bool pressed = mapping.source.kind == 1 ? value > 0 : value >= 64;
             if (!pressed) { releaseRequired = false; down = false; }
@@ -115,7 +117,7 @@ struct Row {
         }
     }
     std::optional<double> VolumeWrite() const {
-        if (!Ready() || !mapping.use) return {};
+        if (!Ready() || !mapping.Enabled()) return {};
         if (mapping.action == Action::Volume) { const auto value = pickup.NextWrite(); return value ? std::optional<double>(DecodeGain(*value)) : std::nullopt; }
         return relativeWrite;
     }
@@ -123,12 +125,18 @@ struct Row {
 inline bool Conflict(const Source& source, const std::vector<Source>& reserved, const std::vector<Row>& rows, uint64_t except) {
     if (!source.Valid()) return false;
     if (std::find(reserved.begin(), reserved.end(), source) != reserved.end()) return true;
-    return std::any_of(rows.begin(), rows.end(), [&](const Row& r) { return r.mapping.id != except && r.mapping.use && r.mapping.source == source; });
+    return std::any_of(rows.begin(), rows.end(), [&](const Row& r) { return r.mapping.id != except && r.mapping.Enabled() && r.mapping.source == source; });
 }
 inline bool SameTarget(const Mapping& a, const Mapping& b) {
     return a.endpoint == b.endpoint && a.appKey == b.appKey && (a.action == Action::Mute) == (b.action == Action::Mute);
 }
-inline bool Configured(const Mapping& m) { return m.use || m.source.Valid() || m.action != Action::Volume; }
+inline bool Configured(const Mapping& m) { return m.hidden || m.use || m.source.Valid() || m.action != Action::Volume; }
+inline void HideRow(Row& row) {
+    row.mapping.hidden = true; row.mapping.use = false; row.Reset();
+}
+inline void RestoreRow(Row& row) {
+    row.mapping.hidden = false; row.mapping.use = false; row.Reset();
+}
 // Reconcile by endpoint + executable, never by row order. Configured offline
 // rows remain in the model/profile; the window shows only present sessions.
 inline void SyncApplications(std::vector<Row>& rows, const std::vector<Endpoint>& endpoints, const std::vector<Session>& sessions, int edition, uint64_t& nextId) {

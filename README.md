@@ -4,7 +4,7 @@
 
 Soft takeover for ordinary MIDI faders controlling VoiceMeeter. Move a hardware fader to the current software position before it takes control, so mismatched positions do not cause an immediate volume jump.
 
-**Development build: 0.4.0-preview.2 · Windows x64.** Fixes wheel/resize repainting and adds an automatic application list with Use checkboxes, direct input buttons and closed-app cleanup. The existing strip/bus pickup engine is retained. The updated application feature still needs physical controller and listening acceptance.
+**Development build: 0.4.0-preview.3 · Windows x64.** Application MIDI Control now uses only VAIO/AUX/VAIO 3 pages and lets you remove unwanted rows, remember them and restore them later. The existing strip/bus pickup engine is retained. The updated application feature still needs physical controller and listening acceptance.
 
 [Published 0.3.0 prerelease](https://github.com/torment78/Elka.MidiPickup/releases/tag/v0.3.0-preview.1) · [Application MIDI Control beta](docs/Application-MIDI-Control.md) · [Setup and testing](docs/Testing.md) · [Known limitations](docs/Limitations.md) · [Report a problem](https://github.com/torment78/Elka.MidiPickup/issues/new?template=bug_report.md) · [Support on Ko-fi](https://ko-fi.com/msffixit)
 
@@ -20,7 +20,7 @@ Elka does not create a virtual MIDI port or forward the controller's other messa
 
 ## Features
 
-- Separate **Application MIDI Control** preview: automatic app rows, Use checkboxes, edition-aware VAIO/AUX/VAIO 3 and In 1–5 pages, MIDI Learn, independent pickup, mute buttons and explicit relative encoder modes. Closed apps leave the list while their learned assignments are retained. [Preview setup and limits](docs/Application-MIDI-Control.md).
+- Separate **Application MIDI Control** preview: automatic app rows, Use checkboxes, edition-aware VAIO/AUX/VAIO 3 pages, MIDI Learn, independent pickup, mute buttons and explicit relative encoder modes. Remove unwanted rows with the button or right-click menu; restore them when needed. Closed apps leave the list while their learned assignments are retained. [Preview setup and limits](docs/Application-MIDI-Control.md).
 
 - **Sixteen independent mappings** across separate Strips and Buses pages; both pages keep processing together.
 - **MIDI Learn** for 7-bit absolute CC faders, with target selection and live hardware/software values.

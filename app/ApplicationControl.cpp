@@ -62,7 +62,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
             SyncApplications(state.rows, state.endpoints, state.sessions, state.edition, nextId);
             auto reconcile = [&] { for (auto& row : state.rows) {
                 const bool conflict = Conflict(row.mapping.source, current.reserved, state.rows, row.mapping.id) || !RouteAvailable(row.mapping.route, state.edition) ||
-                    std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& other) { return other.mapping.id != row.mapping.id && other.mapping.use && SameTarget(row.mapping, other.mapping); });
+                    std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& other) { return other.mapping.id != row.mapping.id && other.mapping.Enabled() && SameTarget(row.mapping, other.mapping); });
                 if (conflict != row.blocked) row.Reset();
                 row.blocked = conflict;
                 row.pickup.tolerance = state.tolerance;
@@ -76,7 +76,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 auto found = std::find_if(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.id == command.row; });
                 Row* row = found == state.rows.end() ? nullptr : &*found;
                 if (row && !Configured(row->mapping) &&
-                    (command.operation == Operation::Learn || command.operation == Operation::Mode || (command.operation == Operation::Use && command.value)) &&
+                    (command.operation == Operation::Learn || command.operation == Operation::Mode || command.operation == Operation::Hide || (command.operation == Operation::Use && command.value)) &&
                     std::count_if(state.rows.begin(), state.rows.end(), [](const Row& r) { return Configured(r.mapping); }) >= 128) {
                     state.notice = L"Save up to 128 application controls. Clear an unused assignment first."; continue;
                 }
@@ -105,15 +105,27 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                 }
                 case Operation::Remove:
                     if (row) { halt(); state.rows.erase(found); state.dirty = true; } break;
+                case Operation::Hide:
+                    if (row) {
+                        HideRow(*row); if (state.learning == row->mapping.id) state.learning = 0;
+                        state.dirty = true;
+                        state.notice = L"Row removed from Elka and its MIDI control disabled. Save applications to remember; Restore removed brings it back. VoiceMeeter's list is unchanged.";
+                    } break;
+                case Operation::RestoreHidden:
+                    if (RouteAvailable(command.route, state.edition)) {
+                        for (auto& r : state.rows) if (r.mapping.route == command.route && r.mapping.hidden) RestoreRow(r);
+                        state.dirty = true;
+                        state.notice = L"Removed rows restored on this input. Tick Use to enable them again, then Save applications.";
+                    } break;
                 case Operation::Learn:
-                    if (row && state.connected) {
+                    if (row && !row->mapping.hidden && state.connected) {
                         const bool cancel = state.learning == command.row; halt();
                         state.learning = cancel ? 0 : command.row;
                         state.notice = cancel ? L"Learn cancelled." : L"Move one control. CC learns a fader/knob; a note learns a mute button. No application writes during Learn.";
                     } else state.notice = L"Connect MIDI and VoiceMeeter before learning.";
                     break;
                 case Operation::Use:
-                    if (row) {
+                    if (row && !row->mapping.hidden) {
                         halt(); row->mapping.use = command.value != 0; row->failed = false; state.dirty = true;
                     } break;
                 case Operation::Mode:
@@ -126,9 +138,9 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                     halt();
                     if (!state.connected) { state.notice = L"Connect MIDI and VoiceMeeter in the main window first."; break; }
                     if (!state.confirmed) { state.notice = L"Disable the new controls' duplicate mappings, then tick the confirmation."; break; }
-                    const bool any = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.use && r.mapping.source.Valid() && RouteAvailable(r.mapping.route, state.edition); });
+                    const bool any = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) { return r.mapping.Enabled() && r.mapping.source.Valid() && RouteAvailable(r.mapping.route, state.edition); });
                     const bool invalid = std::any_of(state.rows.begin(), state.rows.end(), [&](const Row& r) {
-                        return r.mapping.use && RouteAvailable(r.mapping.route, state.edition) && (!r.mapping.source.Valid() || Conflict(r.mapping.source, current.reserved, state.rows, r.mapping.id) || r.blocked);
+                        return r.mapping.Enabled() && RouteAvailable(r.mapping.route, state.edition) && (!r.mapping.source.Valid() || Conflict(r.mapping.source, current.reserved, state.rows, r.mapping.id) || r.blocked);
                     });
                     if (!any || invalid) { state.notice = L"Learn each enabled row and resolve duplicate MIDI sources or application targets. Strip/bus controls are reserved."; break; }
                     for (auto& r : state.rows) r.failed = false;
@@ -178,7 +190,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
             bool fresh{};
             { std::lock_guard lock(inputMutex); fresh = link.connected && GetTickCount64() - link.at < 300; }
             if (state.active && fresh && !emergencyStop && !stop.stop_requested()) for (auto& row : state.rows) {
-                if (!row.mapping.use || !row.Ready()) continue;
+                if (!row.mapping.Enabled() || !row.Ready()) continue;
                 { std::lock_guard lock(inputMutex);
                     if (Conflict(row.mapping.source, link.reserved, state.rows, row.mapping.id)) { row.Reset(); row.blocked = true; continue; }
                 }

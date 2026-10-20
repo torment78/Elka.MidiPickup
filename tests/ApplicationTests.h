@@ -76,9 +76,14 @@ void ApplicationTests() {
     Check(EndpointRoute(L"Voicemeeter In 10") == -1 && EndpointRoute(L"Other Input") == -1, "unknown endpoints never guessed");
     for (int edition = 1; edition <= 3; ++edition) {
         int available{}; for (int route = 0; route < RouteCount; ++route) if (RouteAvailable(route, edition)) ++available;
-        Check(available == (edition == 1 ? 3 : edition == 2 ? 5 : 8), "input buttons follow VoiceMeeter edition");
+        Check(available == edition, "only virtual input buttons follow VoiceMeeter edition");
     }
     Check(!RouteAvailable(0, 0) && !RouteAvailable(-1, 3) && !RouteAvailable(8, 3), "disconnected and invalid routes unavailable");
+    for (int route = 3; route < RouteCount; ++route) {
+        Row legacy = row; legacy.mapping.route = route;
+        legacy.Observe(Resolve({a}, a.endpoint, a.appKey), 0); legacy.Input(0, true); legacy.Input(127, true);
+        Check(!RouteAvailable(route, 3) && !legacy.VolumeWrite() && !Conflict(legacy.mapping.source, {}, {legacy}, 999), "legacy In 1-5 mappings neither write nor reserve MIDI");
+    }
     std::vector<Endpoint> endpoints{{L"vaio3", L"VAIO 3", 2, true}, {L"aux", L"AUX", 1, true}};
     std::vector<Row> automatic; uint64_t nextId = 1;
     SyncApplications(automatic, endpoints, {a, a, b, c}, 3, nextId);
@@ -92,12 +97,32 @@ void ApplicationTests() {
     Check(automatic[0].mapping.route == 2 && automatic[0].mapping.endpoint == a.endpoint, "legacy endpoint choice migrates by identity without retargeting");
     SyncApplications(automatic, endpoints, {a, b}, 1, nextId);
     Check(automatic.size() == 1, "edition changes retain saved mappings but do not discover unsupported inputs");
+    HideRow(automatic[0]);
+    Check(automatic[0].mapping.hidden && !automatic[0].mapping.use && !automatic[0].pickup.tracking, "remove row disables control and resets pickup");
+    SyncApplications(automatic, endpoints, {a, b}, 3, nextId);
+    Check(automatic.size() == 2 && automatic[0].mapping.hidden && !automatic[1].mapping.hidden, "removed app stays hidden only on its original endpoint");
+    SyncApplications(automatic, endpoints, {}, 3, nextId);
+    SyncApplications(automatic, endpoints, {a}, 3, nextId);
+    Check(automatic.size() == 1 && automatic[0].mapping.hidden && automatic[0].mapping.id == firstId, "removed row does not return after app restart or refresh");
+    automatic[0].mapping.use = true; automatic[0].Observe(Resolve({a}, a.endpoint, a.appKey), 0); automatic[0].Input(0, true); automatic[0].Input(127, true);
+    Check(!automatic[0].VolumeWrite() && !Conflict(automatic[0].mapping.source, {}, automatic, 999), "hidden flag independently blocks output and source reservation");
+    RestoreRow(automatic[0]);
+    Check(!automatic[0].mapping.hidden && !automatic[0].mapping.use && automatic[0].mapping.source == Source{0, 2, 91}, "restore keeps learned source but requires explicit Use");
+    Row unlearned; unlearned.mapping = {nextId++, 2, a.endpoint, a.appKey, a.name, {}, Action::Volume, false}; HideRow(unlearned);
+    Check(Configured(unlearned.mapping), "removing an unlearned row must persist the exclusion");
     Setup profile; profile.endpoints = {L"endpoint 1", L"endpoint 2", L"endpoint 3"}; profile.mappings = {row.mapping, button.mapping}; profile.mappings[0].name = L"Músic \"player\"";
     const auto path = std::filesystem::temp_directory_path() / (L"Elka-AppMidi-test-" + std::to_wstring(GetCurrentProcessId()) + L".applications");
     Check(SaveApplicationSetup(path, profile), "application profile saves atomically"); Setup loaded;
     Check(LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 2 && loaded.mappings[0].name == profile.mappings[0].name && loaded.endpoints == profile.endpoints, "application profile Unicode and mapping identity round trip");
     profile.endpoints[7] = L"in5"; profile.mappings[0].route = 7; profile.mappings[0].endpoint = L"in5";
-    Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings[0].route == 7 && loaded.endpoints[7] == L"in5", "v2 profile supports In 5");
+    Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings[0].route == 7 && loaded.endpoints[7] == L"in5" && !loaded.mappings[0].Enabled(), "legacy In 5 mapping preserved but disabled");
+    profile.mappings.push_back(unlearned.mapping);
+    Check(SaveApplicationSetup(path, profile) && LoadApplicationSetup(path, loaded) && loaded.mappings.back().hidden && !loaded.mappings.back().use && !loaded.mappings.back().source.Valid(), "removed unlearned row survives save and reload");
+    {
+        const std::wstring legacy = L"\ufeffElkaApplicationMidi 2\n3\n\"vaio\"\n\"aux\"\n\"vaio3\"\n\"in1\"\n\"in2\"\n\"in3\"\n\"in4\"\n\"in5\"\n2\n2 1 0 0 7 0 \"vaio3\" \"player.exe\" \"Player\"\n7 1 0 0 8 0 \"in5\" \"browser.exe\" \"Browser\"\n";
+        std::ofstream file(path, std::ios::binary | std::ios::trunc); file.write(reinterpret_cast<const char*>(legacy.data()), static_cast<std::streamsize>(legacy.size() * sizeof(wchar_t)));
+    }
+    Check(LoadApplicationSetup(path, loaded) && loaded.mappings.size() == 2 && loaded.mappings[0].Enabled() && !loaded.mappings[0].hidden && !loaded.mappings[1].Enabled(), "v2 profile keeps VAIO MIDI and disables old numbered inputs");
     {
         const std::wstring legacy = L"\ufeffElkaApplicationMidi 1\n3\n\"vaio\"\n\"aux\"\n\"vaio3\"\n1\n2 1 0 0 7 0 \"actual-in5\" \"player.exe\" \"Player\"\n";
         std::ofstream file(path, std::ios::binary | std::ios::trunc); file.write(reinterpret_cast<const char*>(legacy.data()), static_cast<std::streamsize>(legacy.size() * sizeof(wchar_t)));
@@ -167,6 +192,18 @@ void ControllerIntegration(const elka::apps::Endpoint& endpoint, const std::wstr
     note(false); note(true); note(false);
     wait([](const View& v) { return v.rows[1].writes > 0 && v.rows[1].target.muted; }, "note toggles isolated session mute");
     BOOL muted{}; own->GetMute(&muted); Check(muted != FALSE, "note release does not undo mute");
+    send(Operation::Hide, id);
+    wait([](const View& v) { return v.active && v.rows[0].mapping.hidden && !v.rows[0].mapping.use && !v.rows[1].mapping.hidden; }, "remove row disables only that control while other rows keep running");
+    Check(!controller.Reserved({0, 15, 119}) && controller.Reserved({1, 15, 118}), "removed row releases its MIDI source without releasing other controls");
+    input(0); input(127); Sleep(80); own->GetMasterVolume(&gain);
+    Check(std::abs(gain - 0.4f) < 0.001, "removed row cannot change its application's live volume");
+    send(Operation::Refresh);
+    wait([](const View& v) { return v.rows.size() == 2 && v.rows[0].mapping.hidden && v.rows[0].target.ready; }, "refresh cannot rediscover a removed row");
+    send(Operation::Save); wait([&](const View& v) { return !v.dirty && std::filesystem::exists(path); }, "removed row can be saved");
+    Setup hiddenSetup;
+    Check(LoadApplicationSetup(path, hiddenSetup) && hiddenSetup.mappings.size() == 2 && hiddenSetup.mappings[0].hidden && !hiddenSetup.mappings[0].use, "saved removal keeps exact mapping disabled");
+    Command restore{Operation::RestoreHidden}; restore.route = endpoint.route; controller.Send(restore);
+    wait([](const View& v) { return !v.rows[0].mapping.hidden && !v.rows[0].mapping.use && v.rows[0].mapping.source == Source{0, 15, 119}; }, "restored live row retains MIDI and requires explicit Use");
     send(Operation::Stop); wait([](const View& v) { return !v.active; }, "explicit preview stop");
     note(true); note(false); input(127); Sleep(80); own->GetMute(&muted); own->GetMasterVolume(&gain);
     Check(muted != FALSE && std::abs(gain - 0.4f) < 0.001, "stop blocks both volume and mute writes");
@@ -243,7 +280,7 @@ int InspectAudioSessions(bool integration) {
                 std::wcout << L"  " << session.name << L" | scalar=" << session.volume << L" mute=" << session.muted << L" readable=" << session.readable << L"\n";
         }
         if (integration) {
-            const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [](const Endpoint& e) { return e.route >= 0; });
+            const auto endpoint = std::find_if(endpoints.begin(), endpoints.end(), [](const Endpoint& e) { return RouteAvailable(e.route, 3); });
             Check(endpoint != endpoints.end(), "VoiceMeeter playback endpoint available for isolated test");
             ClosedProcessIntegration(audio, *endpoint);
             ComPtr<IMMDeviceEnumerator> devices; Check(SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&devices))), "test device enumerator");

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+-preview\.\d+$')][string]$Version = '0.4.0-preview.2')
+param([ValidatePattern('^\d+\.\d+\.\d+-preview\.\d+$')][string]$Version = '0.4.0-preview.3')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $root "artifacts\releases\$Version"

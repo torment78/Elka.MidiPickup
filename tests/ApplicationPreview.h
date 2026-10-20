@@ -8,7 +8,7 @@ int ApplicationPreview() {
     {
         AudioSessions audio; audio.Discover(); const auto sessions = audio.Read();
         Setup setup;
-        for (const auto& endpoint : audio.Endpoints()) if (endpoint.route >= 0) {
+        for (const auto& endpoint : audio.Endpoints()) if (RouteAvailable(endpoint.route, 3)) {
             setup.endpoints[endpoint.route] = endpoint.id;
             std::set<std::wstring> seen;
             for (const auto& s : sessions) if (s.endpoint == endpoint.id && seen.insert(s.appKey).second)

@@ -8,7 +8,7 @@
 #include <atomic>
 
 namespace elka::apps {
-enum class Operation { Add, Remove, Learn, Use, Mode, Endpoint, Start, Stop, Rearm, Save, Confirm, Tolerance, Refresh };
+enum class Operation { Add, Remove, Learn, Use, Mode, Endpoint, Start, Stop, Rearm, Save, Confirm, Tolerance, Refresh, Hide, RestoreHidden };
 struct Command {
     Operation operation;
     uint64_t row{};
@@ -53,7 +53,7 @@ public:
     View Snapshot() { std::lock_guard lock(viewMutex); return published; }
     bool Reserved(const Source& source) {
         std::lock_guard lock(viewMutex);
-        return std::any_of(published.rows.begin(), published.rows.end(), [&](const Row& r) { return r.mapping.use && r.mapping.source == source; });
+        return std::any_of(published.rows.begin(), published.rows.end(), [&](const Row& r) { return r.mapping.Enabled() && RouteAvailable(r.mapping.route, published.edition) && r.mapping.source == source; });
     }
 };
 }

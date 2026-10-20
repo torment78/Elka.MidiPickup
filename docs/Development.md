@@ -54,7 +54,7 @@ Optional application integration checks:
 
 The layout caches the requested dimensions of controls, including the expanded height of dropdowns. Scroll-only moves use `SWP_NOSIZE`; layout work disables intermediate redraw/copying and invalidates all children after repositioning. A wheel message at the scroll boundary performs no control moves. Closed dropdowns do not consume wheel input as a selection change. Verify scrolling, dropdown open/close, page changes and reduced window heights in the inspection host.
 
-Application profiles use version 2 for eight input routes and still read version 1. Endpoint IDs remain authoritative when older manually selected routes are classified into the new pages. Discovery-only rows are unchecked and omitted from saved profiles. Closed configured apps remain in the model but are hidden by the UI; session membership changes re-arm pickup. Windows process handles are retained to identify exited owners without relying on a reused PID. Refresh releases this client's cached session interfaces without restarting audio services.
+Application profiles use version 3 with a per-row hidden flag and still read versions 1 and 2. Eight endpoint slots remain for compatibility, but only VAIO/AUX/VAIO 3 can control audio. Endpoint IDs remain authoritative when older manually selected routes are classified into pages. Discovery-only rows are unchecked and omitted from saved profiles unless manually removed. Removed rows are retained by endpoint/executable identity to prevent rediscovery; restoration keeps Use disabled. Closed configured apps remain in the model but are hidden by the UI; session membership changes re-arm pickup. Windows process handles are retained to identify exited owners without relying on a reused PID. Refresh releases this client's cached session interfaces without restarting audio services.
 
 ## Package a preview
 
@@ -62,7 +62,7 @@ Application profiles use version 2 for eight input routes and still read version
 .\scripts\Package-Prerelease.ps1
 ```
 
-Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.2`.
+Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.3`.
 
 The package is intentionally labelled **unsigned**. Signing and installer work are separate from this portable test release. New release versions must update `Version.h`, the packaging default, README and release notes together.
 

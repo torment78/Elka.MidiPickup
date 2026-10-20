@@ -5,11 +5,12 @@
 #include <sstream>
 #include <iomanip>
 #include <map>
+#include <windowsx.h>
 
 namespace elka::apps {
 namespace {
 constexpr COLORREF Back = RGB(23, 21, 24), Field = RGB(33, 30, 33), Ink = RGB(242, 235, 229), Muted = RGB(185, 173, 167), Amber = RGB(239, 168, 97);
-enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, In1, In2, In3, In4, In5, AppLabel, Refresh, AddApp, Rows,
+enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, AppLabel, Refresh, RestoreHidden, AddApp, Rows,
     Learn, Mode, Remove, ToleranceLabel, ToleranceList, Confirm, Start, Stop, Rearm, Save, Close, Status, SelectionHint };
 const wchar_t* ActionName(Action action) {
     switch (action) { case Action::Volume: return L"Volume / pickup"; case Action::Mute: return L"Mute button";
@@ -115,11 +116,12 @@ void Window::Layout() {
     auto move = [&](int id, int x, int y, int w, int h) { controlLayout.Place(Control(id), Scale(x), Scale(y), Scale(std::max(w, 10)), Scale(h)); };
     move(Title, 24, 15, right - 24, 38); move(Subtitle, 24, 59, right - 24, 24);
     int tabX = 24;
-    for (int i = 0; i < RouteCount; ++i) {
+    for (int i = 0; i < InputCount; ++i) {
         move(Vaio + i, tabX, 94, 90, 32);
         if (RouteAvailable(i, view.edition)) tabX += 98;
     }
     move(Refresh, right - 148, 94, 148, 32);
+    move(RestoreHidden, right - 350, 94, 190, 32);
     move(AppLabel, 24, 141, right - 24, 38);
     move(Rows, 24, 184, right - 24, height - 396);
     const int bottom = height - 196;
@@ -143,7 +145,7 @@ void Window::Render() {
     if (!window) return;
     rendering = true; const int previousEdition = view.edition; view = controller.Snapshot();
     if (!RouteAvailable(route, view.edition)) route = 0;
-    for (int i = 0; i < RouteCount; ++i) {
+    for (int i = 0; i < InputCount; ++i) {
         const bool available = RouteAvailable(i, view.edition);
         const bool detected = std::any_of(view.endpoints.begin(), view.endpoints.end(), [&](const Endpoint& e) { return e.route == i; });
         if ((IsWindowVisible(Control(Vaio + i)) != FALSE) != available) ShowWindow(Control(Vaio + i), available ? SW_SHOW : SW_HIDE);
@@ -155,9 +157,13 @@ void Window::Render() {
     const int topIndex = ListView_GetTopIndex(Control(Rows));
     const auto topId = topIndex >= 0 && topIndex < static_cast<int>(visible.size()) ? visible[topIndex] : 0;
     std::vector<uint64_t> next;
-    for (const auto& r : view.rows) if (RouteAvailable(route, view.edition) && r.mapping.route == route && !r.target.instances.empty()) next.push_back(r.mapping.id);
+    for (const auto& r : view.rows) if (RouteAvailable(route, view.edition) && r.mapping.route == route && !r.mapping.hidden && !r.target.instances.empty()) next.push_back(r.mapping.id);
+    const auto hidden = std::count_if(view.rows.begin(), view.rows.end(), [&](const Row& r) { return r.mapping.route == route && r.mapping.hidden; });
+    Set(Control(RestoreHidden), L"Restore removed (" + std::to_wstring(hidden) + L")");
+    EnableWindow(Control(RestoreHidden), hidden != 0 && RouteAvailable(route, view.edition));
     Set(Control(AppLabel), view.edition == 0 ? L"Connect VoiceMeeter in the main window to detect its inputs." : next.empty() ?
-        std::wstring(RouteName(route)) + L" — No applications connected. Start playback on this input; the list updates automatically." :
+        std::wstring(RouteName(route)) + (hidden ? L" — No visible application rows. Use Restore removed, or start playback on this input." :
+            L" — No applications connected. Start playback on this input; the list updates automatically.") :
         std::wstring(RouteName(route)) + L" — Tick Use for the apps you want to control, then select a row and Learn. All input pages run together.");
     if (next != visible) {
         uint64_t selection = oldSelection;
@@ -210,13 +216,14 @@ void Window::Command(int id, int code) {
         else if (id == ToleranceList) { command.operation = Operation::Tolerance; command.value = selected; }
         else return;
     } else if (code == BN_CLICKED) {
-        if (id >= Vaio && id <= In5) { route = id - Vaio; for (int i = 0; i < RouteCount; ++i) InvalidateRect(Control(Vaio + i), nullptr, TRUE); Render(); return; }
+        if (id >= Vaio && id <= Vaio3) { route = id - Vaio; for (int i = 0; i < InputCount; ++i) InvalidateRect(Control(Vaio + i), nullptr, TRUE); Render(); return; }
         if (id == Close) { ShowWindow(window, SW_HIDE); return; }
         switch (id) {
         case AddApp: command.operation = Operation::Add; break;
         case Refresh: command.operation = Operation::Refresh; break;
+        case RestoreHidden: command.operation = Operation::RestoreHidden; command.route = route; break;
         case Learn: command.operation = Operation::Learn; break;
-        case Remove: command.operation = Operation::Remove; break;
+        case Remove: command.operation = Operation::Hide; break;
         case Start: command.operation = Operation::Start; break;
         case Stop: command.operation = Operation::Stop; break;
         case Rearm: command.operation = Operation::Rearm; break;
@@ -231,9 +238,9 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
     switch (message) {
     case WM_CREATE: {
         Add(L"STATIC", L"Application MIDI Control", SS_LEFT, Title); Add(L"STATIC", L"PREVIEW", SS_LEFT, Subtitle);
-        for (int i = 0; i < RouteCount; ++i) Add(L"BUTTON", RouteName(i), BS_OWNERDRAW | WS_TABSTOP, Vaio + i);
-        for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
-            {Remove, L"Clear MIDI"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}})
+        for (int i = 0; i < InputCount; ++i) Add(L"BUTTON", RouteName(i), BS_OWNERDRAW | WS_TABSTOP, Vaio + i);
+        for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {RestoreHidden, L"Restore removed (0)"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
+            {Remove, L"Remove row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}})
             Add(L"BUTTON", name, BS_OWNERDRAW | WS_TABSTOP, id);
         Add(L"STATIC", L"Connected apps appear automatically. Tick Use, select a row, then Learn.", SS_LEFT, AppLabel);
         Add(L"STATIC", L"Tolerance", SS_LEFT, ToleranceLabel); Add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, SelectionHint); Add(L"STATIC", L"", SS_LEFT, Status);
@@ -287,6 +294,34 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
             }
         }
         break;
+    }
+    case WM_CONTEXTMENU: {
+        if (reinterpret_cast<HWND>(w) != Control(Rows)) break;
+        POINT point{GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        if (point.x == -1 && point.y == -1) {
+            const int index = ListView_GetNextItem(Control(Rows), -1, LVNI_SELECTED);
+            RECT rect{};
+            if (index < 0 || !ListView_GetItemRect(Control(Rows), index, &rect, LVIR_BOUNDS)) return 0;
+            point = {rect.left + Scale(80), rect.bottom}; ClientToScreen(Control(Rows), &point);
+        } else {
+            LVHITTESTINFO hit{}; hit.pt = point; ScreenToClient(Control(Rows), &hit.pt);
+            const int index = ListView_SubItemHitTest(Control(Rows), &hit);
+            if (index < 0) return 0;
+            ListView_SetItemState(Control(Rows), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+            ListView_SetItemState(Control(Rows), index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+        const auto id = Selected(); if (!id) return 0;
+        const auto menu = CreatePopupMenu(); if (!menu) return 0;
+        AppendMenuW(menu, MF_STRING, 1, L"Remove row from Elka");
+        AppendMenuW(menu, MF_STRING, 2, L"Clear MIDI assignment");
+        // Keep the clicked identity even if discovery refreshes while the menu is open.
+        const auto choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0, window, nullptr);
+        DestroyMenu(menu);
+        if (choice) {
+            apps::Command command{choice == 1 ? Operation::Hide : Operation::Remove};
+            command.row = id; controller.Send(std::move(command));
+        }
+        return 0;
     }
     case WM_DRAWITEM: {
         const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(l); if (draw->CtlType != ODT_BUTTON) break;
