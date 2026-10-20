@@ -12,6 +12,7 @@ int checks{};
 void Check(bool value, const char* name) { ++checks; if (!value) throw std::runtime_error(name); }
 #include "ApplicationTests.h"
 #include "ApplicationPreview.h"
+#include "AudioResetTests.h"
 void BurstTests() {
     elka::MidiInbox inbox;
     elka::MidiInbox::Batch batch;
@@ -239,6 +240,7 @@ int main(int argc, char** argv) {
         ReadbackTests();
         ProfileTests();
         ApplicationTests();
+        AudioResetTests();
         std::cout << "PASS: " << checks << " pickup checks\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }

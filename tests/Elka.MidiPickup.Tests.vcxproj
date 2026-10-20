@@ -18,6 +18,6 @@
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="PickupTests.cpp" /><ClCompile Include="MainWindowPreview.cpp" /><ClInclude Include="..\app\Pickup.h" /><ClInclude Include="..\app\ControlLayout.h" /></ItemGroup>
   <ItemGroup><ClInclude Include="ApplicationTests.h" /><ClInclude Include="..\app\ApplicationMidi.h" /><ClInclude Include="..\app\ApplicationProfile.h" /><ClInclude Include="..\app\AudioSessions.h" /></ItemGroup>
-  <ItemGroup><ClCompile Include="..\app\ApplicationControl.cpp" /><ClCompile Include="..\app\ApplicationWindow.cpp" /><ClInclude Include="ApplicationPreview.h" /></ItemGroup>
+  <ItemGroup><ClCompile Include="..\app\ApplicationControl.cpp" /><ClCompile Include="..\app\ApplicationWindow.cpp" /><ClCompile Include="..\app\AudioReset.cpp" /><ClInclude Include="..\app\AudioReset.h" /><ClInclude Include="AudioResetTests.h" /><ClInclude Include="ApplicationPreview.h" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

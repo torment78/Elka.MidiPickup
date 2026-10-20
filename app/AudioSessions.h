@@ -140,10 +140,11 @@ public:
     std::vector<Endpoint> Endpoints() const {
         std::vector<Endpoint> result; for (const auto& [id, d] : devices) { (void)id; result.push_back(d->info); } return result;
     }
+    void Clear() { live.clear(); devices.clear(); enumerator.Reset(); error.clear(); }
     void Refresh() {
         // Release our references to stale sessions. This does not restart
         // Windows audio, alter routing, or reset another app's mixer cache.
-        live.clear(); devices.clear(); enumerator.Reset(); Discover();
+        Clear(); Discover();
     }
     std::vector<Session> Read() {
         for (const auto& [id, device] : devices) { (void)id; for (const auto& control : device->notifications->Drain()) Add(device->info, control.Get()); }

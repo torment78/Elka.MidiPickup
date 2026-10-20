@@ -2,8 +2,10 @@
 #include "ApplicationControl.h"
 #include "ControlLayout.h"
 #include <CommCtrl.h>
+#include <functional>
 
 namespace elka::apps {
+struct AudioResetView { bool available{}, busy{}; std::wstring notice; };
 class Window {
     Controller& controller;
     HWND window{}, owner{};
@@ -15,6 +17,8 @@ class Window {
     View view;
     std::vector<uint64_t> visible;
     elka::ControlLayout controlLayout;
+    std::function<void()> requestAudioReset;
+    std::function<AudioResetView()> audioResetView;
     HWND Control(int id) const { return GetDlgItem(window, id); }
     int Scale(int v) const { return MulDiv(v, dpi, 96); }
     HWND Add(const wchar_t* type, const wchar_t* text, DWORD style, int id);
@@ -28,6 +32,9 @@ class Window {
     static LRESULT CALLBACK DarkControl(HWND control, UINT message, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR context);
 public:
     explicit Window(Controller& value) : controller(value) {}
+    void ConfigureAudioReset(std::function<void()> request, std::function<AudioResetView()> snapshot) {
+        requestAudioReset = std::move(request); audioResetView = std::move(snapshot);
+    }
     ~Window();
     HWND Show(HWND parent, HINSTANCE module);
     bool Dialog(MSG& message) { return window && IsWindowVisible(window) && IsDialogMessageW(window, &message); }

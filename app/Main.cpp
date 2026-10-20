@@ -5,6 +5,7 @@
 #include "Version.h"
 #include "ApplicationWindow.h"
 #include "ControlLayout.h"
+#include "AudioReset.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <CommCtrl.h>
@@ -71,6 +72,10 @@ private:
     elka::VoiceMeeter vm;
     elka::apps::Controller appControl;
     elka::apps::Window appWindow{appControl};
+    elka::audio_reset::Sequence audioReset;
+    elka::audio_reset::Job audioResetJob;
+    uint64_t audioResetDeadline{};
+    std::wstring audioResetNotice;
     elka::MidiInbox::Batch batch;
     std::optional<DWORD> learnedMessage;
     std::filesystem::path profile;
@@ -420,13 +425,14 @@ private:
         lastFrame = now;
         if (midi.Open() && midi.Errors() != errorsSeen) { errorsSeen = midi.Errors(); appControl.Suspend(); Pause(L"MIDI input reported malformed data. Output stopped; reconnect before testing again."); }
         if (midi.Open() && midi.Dropped() != dropsSeen) { dropsSeen = midi.Dropped(); RecoverInput(L"MIDI buffer filled during a delay."); }
-        PollSoftware(now);
+        if (!audioReset.Busy()) PollSoftware(now);
         if (appControl.Launched()) {
             std::vector<elka::apps::Source> reserved;
             for (const auto& row : rows) if (row.mapping.use && row.mapping.channel >= 0)
                 reserved.push_back({0, row.mapping.channel, row.mapping.cc});
             appControl.Bridge(!demo && midi.Open() && vm.Connected() && learning < 0 && !shuttingDown, vm.edition, reserved);
         }
+        if (audioReset.Busy()) { midi.Clear(); return; }
         midi.Drain(batch);
         bool stale = false;
         for (size_t i = 0; i < batch.size; ++i) {
@@ -446,8 +452,60 @@ private:
             row.pickup.Written(*value, now); ++row.writes;
         }
     }
+    void FinishAudioReset(const std::wstring& message, bool resume) {
+        audioReset.Finish(); midi.Clear();
+        for (auto& row : rows) row.pickup.Disconnect();
+        if (!resume) Pause(L"");
+        PollSoftware(GetTickCount64());
+        lastFrame = GetTickCount64();
+        elka::apps::Command command{elka::apps::Operation::EndAudioReset};
+        command.value = resume ? 1 : 0; command.name = message; appControl.Send(std::move(command));
+        audioResetNotice.clear(); Tell(message);
+    }
+    void BeginAudioReset() {
+        std::lock_guard lock(stateMutex);
+        if (demo || !vm.Connected() || shuttingDown || !audioReset.Begin()) return;
+        startupPending = false; learning = -1; learnedMessage.reset(); midi.Clear();
+        for (auto& row : rows) row.pickup.Disconnect();
+        appControl.Send({elka::apps::Operation::BeginAudioReset});
+        audioResetDeadline = GetTickCount64() + 3000;
+        audioResetNotice = L"Preparing audio reset. Windows will ask for administrator approval.";
+        Tell(audioResetNotice); Render();
+    }
+    void AdvanceAudioReset() {
+        using namespace elka::audio_reset;
+        const auto now = GetTickCount64();
+        if (audioReset.Current() == Stage::Preparing) {
+            if (appControl.Snapshot().audioResetting) {
+                audioReset.WindowsStarted();
+                audioResetNotice = L"Approve the Windows administrator prompt. Restarting Windows Audio...";
+                audioResetJob.Start(window);
+            } else if (now >= audioResetDeadline) {
+                FinishAudioReset(L"Audio reset cancelled because application control did not pause in time. No services were restarted.", false);
+            }
+        } else if (audioReset.Current() == Stage::Windows && audioResetJob.Done()) {
+            const auto result = audioResetJob.Outcome();
+            audioReset.WindowsFinished(result == Result::Success, now);
+            if (result != Result::Success) FinishAudioReset(Describe(result), result == Result::Cancelled);
+            else { audioResetNotice = L"Windows Audio is running. Waiting one second before restarting VoiceMeeter..."; Tell(audioResetNotice); }
+        } else if (audioReset.TakeVoiceMeeterRestart(now)) {
+            if (!vm.RestartAudioEngine()) FinishAudioReset(L"Windows Audio restarted, but VoiceMeeter rejected its engine restart. Reconnect VoiceMeeter before retrying.", false);
+            else {
+                audioResetDeadline = now + 6000;
+                audioResetNotice = L"VoiceMeeter audio engine restart requested. Waiting for fresh levels...";
+                Tell(audioResetNotice);
+            }
+        } else if (audioReset.ReadyToRead(now)) {
+            if (vm.Refresh() && vm.Read(0)) {
+                FinishAudioReset(L"Windows Audio restarted, then VoiceMeeter's engine restart was requested after one second. Apps refreshed; faders re-armed.", true);
+            } else if (now >= audioResetDeadline) {
+                FinishAudioReset(L"Windows Audio restarted and VoiceMeeter's restart was requested, but fresh levels are unavailable. Reconnect VoiceMeeter.", false);
+            }
+        }
+    }
     void UiTick() {
-        TryStartup();
+        AdvanceAudioReset();
+        if (!audioReset.Busy()) TryStartup();
         if (vm.ButtonRegistered() && !buttonWasRegistered) Log(L"Registered MIDI Pickup on VoiceMeeter custom display button 2.");
         buttonWasRegistered = vm.ButtonRegistered();
         if (learnedMessage) {
@@ -591,6 +649,7 @@ private:
     }
     void ExitMain() {
         if (shuttingDown) return;
+        if (audioReset.Busy()) { Tell(L"Audio reset is still running. You can hide the window; exit after it finishes."); return; }
         shuttingDown = true; startupPending = false; Pause(L"");
         appControl.Suspend();
         worker.request_stop(); workerWake.notify_all();
@@ -626,9 +685,17 @@ private:
         EnableIfNeeded(C(DemoHardware), demo); EnableIfNeeded(C(DemoSoftware), demo); EnableIfNeeded(C(Save), !demo); EnableIfNeeded(C(Load), !demo);
         EnableIfNeeded(C(Start), !active); EnableIfNeeded(C(Stop), active || startupPending || learning >= 0);
         EnableIfNeeded(C(Hide), trayAdded || vm.ButtonRegistered());
+        for (int id : {Demo, Range, Tolerance, Rearm, LaunchWindows, LaunchTray, LaunchActive})
+            EnableIfNeeded(C(id), !audioReset.Busy());
+        if (audioReset.Busy()) {
+            for (int id : {Device, Refresh, ConnectMidi, ConnectVm, Confirm, Save, Load, Start})
+                EnableIfNeeded(C(id), false);
+            SetText(C(Banner), L"AUDIO RESET  /  MIDI output temporarily paused");
+        }
         uint64_t writes{};
         for (int i = 0; i < 16; ++i) {
             auto& row = rows[i]; const auto& m = row.mapping; const auto& p = row.pickup; writes += row.writes;
+            for (int field : {0, 2, 6}) EnableIfNeeded(R(i, field), !audioReset.Busy());
             SetText(R(i, 1), m.channel < 0 ? L"Not learned" : L"Ch " + std::to_wstring(m.channel + 1) + L"  /  CC " + std::to_wstring(m.cc));
             SetText(R(i, 3), p.hardware ? std::to_wstring(*p.hardware) + L" / " + Db(p.range.Gain(*p.hardware)) : L"--");
             SetText(R(i, 4), p.software ? Db(*p.software) : L"--");
@@ -650,6 +717,7 @@ private:
             L"  |  Input resets: " + std::to_wstring(timingRecoveries) + L"  |  Max gap: " + std::to_wstring(maxGap) + L" ms");
     }
     void Command(int id, int code) {
+        if (audioReset.Busy() && id != Hide && id != Exit && id != StripTab && id != BusTab && id != SettingsTab && id != Stop) return;
         if (id >= RowBase && id < RowBase + 160) {
             const int field = (id - RowBase) % RowStride, index = (id - RowBase) / RowStride;
             if (field == 6 && code == BN_CLICKED) BeginLearn(index);
@@ -735,6 +803,10 @@ public:
     bool Dialog(MSG& message) { return appWindow.Dialog(message); }
     explicit Application(HINSTANCE appInstance, const std::wstring& arguments) : instance(appInstance) {
         forceTray = arguments.find(L"--tray") != std::wstring::npos; forceWindow = arguments.find(L"--show") != std::wstring::npos;
+        appWindow.ConfigureAudioReset([this] { BeginAudioReset(); }, [this] {
+            std::lock_guard lock(stateMutex);
+            return elka::apps::AudioResetView{!demo && vm.Connected() && !shuttingDown, audioReset.Busy(), audioResetNotice};
+        });
     }
     bool StartHidden() const { return !forceWindow && trayAdded && (forceTray || savedSetup.launchTray); }
     ~Application() { worker.request_stop(); workerWake.notify_all(); if (worker.joinable()) worker.join(); appControl.Shutdown(); midi.Close(); vm.Close(); for (auto f : fonts) if (f) DeleteObject(f); DeleteObject(background); DeleteObject(fieldBrush); }
@@ -880,6 +952,10 @@ int MainWindowPreview() {
     constexpr auto windowClass = L"ElkaMidiPickupUiInspection", mutexName = L"Local\\ElkaMidiPickupUiInspection";
 #else
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR arguments, int show) {
+    if (arguments && wcscmp(arguments, elka::audio_reset::HelperArgument) == 0) {
+        try { return elka::audio_reset::RunElevated(); }
+        catch (...) { return static_cast<int>(elka::audio_reset::Result::PreflightFailed); }
+    }
     constexpr auto windowClass = L"ElkaMidiPickupTestWindow", mutexName = L"Local\\ElkaMidiPickupTestApp";
 #endif
     const HANDLE singleInstance = CreateMutexW(nullptr, FALSE, mutexName);

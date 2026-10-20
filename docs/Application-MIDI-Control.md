@@ -35,11 +35,25 @@ Mappings identify the exact playback endpoint and executable path, rather than a
 
 Closed apps and expired sessions leave the visible table automatically. Learned assignments remain in your saved setup and return with the same app and playback device. New or changed sessions re-arm pickup. **Refresh apps** releases Elka's session cache and rescans without resetting audio; it also re-arms application faders. A paused/background app can legitimately retain an inactive session, so it stays visible while its process and session remain alive. Elka does not forcibly clear VoiceMeeter's or Windows Volume Mixer's own lists. [Windows session states](https://learn.microsoft.com/en-us/windows/win32/api/audiosessiontypes/ne-audiosessiontypes-audiosessionstate).
 
-VoiceMeeter's app list comes from Windows audio sessions. The documented Windows session interfaces do not offer a command to delete another application's session. Clearing stored volume/routing settings in the registry is not the same as releasing that application's open streams. There is no Windows/VoiceMeeter list-reset button in this build. Fully exiting and reopening the affected app may release its old streams; **Refresh apps** then rescans Elka's list. Background processes may keep a session alive. [Microsoft audio sessions](https://learn.microsoft.com/en-us/windows/win32/coreaudio/audio-sessions), [session control interface](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nn-audiopolicy-iaudiosessioncontrol2).
+VoiceMeeter's app list comes from Windows audio sessions. The documented Windows session interfaces do not offer a command to delete another application's session. Clearing stored volume/routing settings in the registry is not the same as releasing that application's open streams. Fully exiting and reopening the affected app may release its old streams; **Refresh apps** then rescans Elka's list. Background processes may keep a session alive. [Microsoft audio sessions](https://learn.microsoft.com/en-us/windows/win32/coreaudio/audio-sessions), [session control interface](https://learn.microsoft.com/en-us/windows/win32/api/audiopolicy/nn-audiopolicy-iaudiosessioncontrol2).
 
 Mappings from preview.1 and preview.2 load automatically and keep their exact endpoint identity. Older In 1–5 mappings are retained in the file but cannot control audio or reserve a MIDI source. If an executable moves to a different folder during an update, learn its new row; the old assignment remains saved. Inputs renamed beyond recognition are not guessed; restore the standard Windows playback-device name for automatic input buttons. Unidentifiable or cross-process sessions are omitted. Exclusive-mode audio, ASIO and apps routed outside VoiceMeeter are outside this preview.
 
 If a write is rejected or the target changes during a write, that row shows **Stopped / re-arm**. Check its current volume and press **Re-arm**. Disconnecting MIDI or VoiceMeeter, entering Demo, or learning a strip/bus control stops the application preview; reconnect and explicitly start it again.
+
+## Reset audio
+
+If an application remains listed on an old input after you move its audio elsewhere, click **Reset audio** at the top right. Connect VoiceMeeter in the main window first; MIDI does not need to be connected for the reset.
+
+This single button:
+
+1. Requests Windows administrator approval and restarts Windows Audio, restoring the running services that depend on it.
+2. Waits one second after those services are running again.
+3. Requests VoiceMeeter's audio engine restart and refreshes Elka's application list.
+
+All Windows audio briefly stops. Applications remain open, but some may need playback resumed. Routing, saved device choices and volume settings are not reset. Live applications can recreate their sessions, so this is not a way to hide an application permanently.
+
+Elka temporarily pauses MIDI output and discards motion received during the reset. Controls that were running return armed for pickup; stopped controls remain stopped. Cancelling administrator approval skips both restarts. If the Windows reset fails, VoiceMeeter is not restarted and the status message explains the problem. The button is disabled until the current reset finishes.
 
 ## Why Windows audio sessions are used
 

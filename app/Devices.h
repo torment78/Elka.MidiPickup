@@ -138,6 +138,11 @@ public:
         auto parameter = Parameter(target);
         return setFloat(parameter.data(), static_cast<float>(gain)) == 0;
     }
+    bool RestartAudioEngine() {
+        if (!Connected()) return false;
+        char command[] = "Command.Restart";
+        return setFloat(command, 1.0f) == 0;
+    }
     void Close() {
         if (buttonRegistered && customButton) {
             wchar_t label[] = L"MIDI Pickup", empty[] = L"";

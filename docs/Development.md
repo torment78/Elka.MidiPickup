@@ -11,6 +11,7 @@ Use Visual Studio 2026, the v145 C++ toolset and Windows SDK 10.0.26100.0. The a
 | `app/Pickup.h` | Per-fader pickup and readback state machine |
 | `app/MidiInbox.h` | Buffered MIDI callback input |
 | `app/Devices.h` | WinMM input and dynamically loaded VoiceMeeter Remote API |
+| `app/AudioReset.h` / `.cpp` | Fixed elevated service helper, recovery plan and reset sequencing |
 | `app/Profile.h` | Saved settings and legacy profile migration |
 | `app/ApplicationMidi.h` | App identity, MIDI actions and scalar pickup model |
 | `app/AudioSessions.h` | Windows endpoint/session discovery, notifications and guarded session writes |
@@ -56,13 +57,17 @@ The layout caches the requested dimensions of controls, including the expanded h
 
 Application profiles use version 3 with a per-row hidden flag and still read versions 1 and 2. Eight endpoint slots remain for compatibility, but only VAIO/AUX/VAIO 3 can control audio. Endpoint IDs remain authoritative when older manually selected routes are classified into pages. Discovery-only rows are unchecked and omitted from saved profiles unless manually removed. Removed rows are retained by endpoint/executable identity to prevent rediscovery; restoration keeps Use disabled. Closed configured apps remain in the model but are hidden by the UI; session membership changes re-arm pickup. Windows process handles are retained to identify exited owners without relying on a reused PID. Refresh releases this client's cached session interfaces without restarting audio services.
 
+The combined audio reset pauses both MIDI workers and releases application session references before launching the same EXE with the exact `--reset-windows-audio` argument using `runas`. This helper runs before normal app initialization; it cannot open MIDI, register Button 2, load a profile, or accept a caller-selected command/service/path. It preflights `Audiosrv` and its running dependent services, stops children first, then restores all attempted services in reverse order even after a stop failure. It does not restart AudioEndpointBuilder or change service configuration.
+
+The main process waits asynchronously for helper success, then waits at least 1,000 ms before issuing `VBVMR_SetParameterFloat("Command.Restart", 1)`. It sends that command once and waits for fresh parameter access before re-arming. API acceptance is not proof of audible recovery; the final message describes a restart request. Cancelled/failed service resets never issue the VoiceMeeter command. Tests inject service outcomes and a virtual clock; audio integration tests hold/release only their own silent session and never run the service helper.
+
 ## Package a preview
 
 ```powershell
 .\scripts\Package-Prerelease.ps1
 ```
 
-Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.3`.
+Packaging builds Release, runs the regression tests, checks the EXE version, and creates a fresh staging folder. It copies only the EXE and public documentation/artwork, never existing profiles, logs, debug symbols or MIDI preview binaries. Outputs include a portable ZIP, artwork ZIP and SHA256SUMS.txt under `artifacts/releases/0.4.0-preview.4`.
 
 The package is intentionally labelled **unsigned**. Signing and installer work are separate from this portable test release. New release versions must update `Version.h`, the packaging default, README and release notes together.
 

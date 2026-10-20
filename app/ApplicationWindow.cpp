@@ -11,7 +11,7 @@ namespace elka::apps {
 namespace {
 constexpr COLORREF Back = RGB(23, 21, 24), Field = RGB(33, 30, 33), Ink = RGB(242, 235, 229), Muted = RGB(185, 173, 167), Amber = RGB(239, 168, 97);
 enum Id { Title = 10, Subtitle, Vaio, Aux, Vaio3, AppLabel, Refresh, RestoreHidden, AddApp, Rows,
-    Learn, Mode, Remove, ToleranceLabel, ToleranceList, Confirm, Start, Stop, Rearm, Save, Close, Status, SelectionHint };
+    Learn, Mode, Remove, ToleranceLabel, ToleranceList, Confirm, Start, Stop, Rearm, Save, Close, Status, SelectionHint, ResetAudio };
 const wchar_t* ActionName(Action action) {
     switch (action) { case Action::Volume: return L"Volume / pickup"; case Action::Mute: return L"Mute button";
     case Action::RelativeTwos: return L"Encoder / 2's comp"; case Action::RelativeOffset: return L"Encoder / offset 64"; }
@@ -120,8 +120,9 @@ void Window::Layout() {
         move(Vaio + i, tabX, 94, 90, 32);
         if (RouteAvailable(i, view.edition)) tabX += 98;
     }
-    move(Refresh, right - 148, 94, 148, 32);
-    move(RestoreHidden, right - 350, 94, 190, 32);
+    move(ResetAudio, right - 148, 94, 148, 32);
+    move(Refresh, right - 308, 94, 148, 32);
+    move(RestoreHidden, right - 510, 94, 190, 32);
     move(AppLabel, 24, 141, right - 24, 38);
     move(Rows, 24, 184, right - 24, height - 396);
     const int bottom = height - 196;
@@ -205,10 +206,23 @@ void Window::Render() {
     SendMessageW(Control(ToleranceList), CB_SETCURSEL, view.tolerance, 0);
     EnableWindow(Control(Start), !view.active && view.connected); EnableWindow(Control(Stop), view.active || view.learning);
     Set(Control(Save), view.dirty ? L"Save applications *" : L"Save applications"); Set(Control(Status), view.notice);
+    const auto reset = audioResetView ? audioResetView() : AudioResetView{};
+    EnableWindow(Control(ResetAudio), reset.available && !reset.busy);
+    Set(Control(ResetAudio), reset.busy ? L"Resetting audio..." : L"Reset audio");
+    if (reset.busy || view.audioResetting) {
+        for (auto id : {Refresh, RestoreHidden, AddApp, Learn, Mode, Remove, ToleranceList, Confirm, Start, Stop, Rearm, Save, Rows})
+            EnableWindow(Control(id), FALSE);
+        Set(Control(Subtitle), L"RESETTING AUDIO  /  Windows Audio, then VoiceMeeter after one second");
+        if (!reset.notice.empty()) Set(Control(Status), reset.notice);
+    } else {
+        for (auto id : {Refresh, ToleranceList, Confirm, Rearm, Save, Rows}) EnableWindow(Control(id), TRUE);
+    }
     rendering = false;
 }
 void Window::Command(int id, int code) {
     if (rendering) return;
+    if (id == ResetAudio && code == BN_CLICKED) { if (requestAudioReset) requestAudioReset(); Render(); return; }
+    if (view.audioResetting && id != Close && !(id >= Vaio && id <= Vaio3)) return;
     apps::Command command{Operation::Stop}; command.row = Selected();
     if (code == CBN_SELCHANGE) {
         const int selected = static_cast<int>(SendMessageW(Control(id), CB_GETCURSEL, 0, 0));
@@ -240,7 +254,7 @@ LRESULT Window::Handle(UINT message, WPARAM w, LPARAM l) {
         Add(L"STATIC", L"Application MIDI Control", SS_LEFT, Title); Add(L"STATIC", L"PREVIEW", SS_LEFT, Subtitle);
         for (int i = 0; i < InputCount; ++i) Add(L"BUTTON", RouteName(i), BS_OWNERDRAW | WS_TABSTOP, Vaio + i);
         for (const auto& [id, name] : {std::pair{Refresh, L"Refresh apps"}, {RestoreHidden, L"Restore removed (0)"}, {AddApp, L"Extra control"}, {Learn, L"Learn selected"},
-            {Remove, L"Remove row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}})
+            {Remove, L"Remove row"}, {Start, L"Start applications"}, {Stop, L"Stop"}, {Rearm, L"Re-arm"}, {Save, L"Save applications"}, {Close, L"Hide window"}, {ResetAudio, L"Reset audio"}})
             Add(L"BUTTON", name, BS_OWNERDRAW | WS_TABSTOP, id);
         Add(L"STATIC", L"Connected apps appear automatically. Tick Use, select a row, then Learn.", SS_LEFT, AppLabel);
         Add(L"STATIC", L"Tolerance", SS_LEFT, ToleranceLabel); Add(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, SelectionHint); Add(L"STATIC", L"", SS_LEFT, Status);

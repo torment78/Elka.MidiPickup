@@ -38,12 +38,46 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
         MidiInbox::Batch batch;
         auto reset = [&] { inbox.Clear(); for (auto& row : state.rows) row.Reset(); };
         auto halt = [&] { state.active = false; state.learning = 0; reset(); };
+        bool resumeAfterReset{};
         while (!stop.stop_requested()) {
             const auto now = GetTickCount64();
             Link current; std::vector<Command> pending;
             { std::lock_guard lock(inputMutex); current = link; pending.swap(commands); }
+            // Finish edits/saves already queued before acknowledging the reset.
+            // Their ordering must not be lost when entering the suspended loop.
+            const auto beginReset = std::find_if(pending.begin(), pending.end(), [](const Command& c) {
+                return c.operation == Operation::BeginAudioReset;
+            });
+            if (beginReset != pending.end() && beginReset != pending.begin()) {
+                std::lock_guard lock(inputMutex);
+                commands.insert(commands.begin(), std::make_move_iterator(beginReset), std::make_move_iterator(pending.end()));
+                pending.erase(beginReset, pending.end());
+            }
             state.connected = current.connected && now - current.at < 300;
             state.edition = current.edition;
+            // Release this client's session references before the service reset.
+            // Do not enumerate or accept MIDI again until both restarts finish.
+            for (const auto& command : pending) {
+                if (command.operation == Operation::BeginAudioReset && !state.audioResetting) {
+                    resumeAfterReset = state.active; halt(); audio.Clear(); state.audioResetting = true;
+                    for (auto& row : state.rows) row.pickup.Disconnect();
+                    state.notice = L"Audio reset in progress. MIDI output is temporarily paused.";
+                } else if (command.operation == Operation::EndAudioReset && state.audioResetting) {
+                    state.audioResetting = false; reset(); discoverAt = 0;
+                    for (auto& row : state.rows) row.pickup.Disconnect();
+                    state.active = resumeAfterReset && command.value && state.connected && state.confirmed;
+                    state.notice = command.name;
+                    resumeAfterReset = false;
+                } else if (command.operation == Operation::Stop && state.audioResetting) resumeAfterReset = false;
+            }
+            if (state.audioResetting) {
+                if (emergencyStop.exchange(false) || !state.connected) resumeAfterReset = false;
+                inbox.Clear();
+                { std::lock_guard lock(viewMutex); published = state; }
+                std::unique_lock lock(waitMutex);
+                wake.wait_for(lock, stop, std::chrono::milliseconds(25), [] { return false; });
+                continue;
+            }
             if (emergencyStop.exchange(false) || !state.connected) {
                 if (state.active || state.learning) state.notice = L"Application control stopped: MIDI/VoiceMeeter connection changed. Reconnect, then Start applications.";
                 halt();
@@ -81,6 +115,7 @@ void Controller::Run(std::stop_token stop, std::filesystem::path path) {
                     state.notice = L"Save up to 128 application controls. Clear an unused assignment first."; continue;
                 }
                 switch (command.operation) {
+                case Operation::BeginAudioReset: case Operation::EndAudioReset: break;
                 case Operation::Endpoint:
                     if (!RouteAvailable(command.route, state.edition)) break;
                     if (std::none_of(state.endpoints.begin(), state.endpoints.end(), [&](const Endpoint& e) { return e.id == command.key && e.route == command.route; })) break;
