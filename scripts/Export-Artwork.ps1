@@ -39,11 +39,9 @@ $document += @'
 
 The horizontal format is 2:1; the vertical format is approximately 9:16, matching the established audio-app artwork sizes. Both JPEG files are below **1,000,000 bytes** (decimal 1 MB). PNG files are full-quality masters and may exceed that size.
 
-Generated with the built-in image generation tool; exact initial and warm-palette edit prompts are in [PROMPTS.md](images/PROMPTS.md). The icon remains cyan/white/orange; only the surrounding header treatment changed to warm colors.
-
 JPEG exports use quality 92 without resizing or cropping. Recreate them with `scripts/Export-Artwork.ps1`. The source PNGs are preserved.
 
-The README uses the horizontal JPEG. The artwork release ZIP includes both orientations, both file formats, the app icon and prompt documentation.
+The README uses the horizontal JPEG. The artwork release ZIP includes both orientations, both file formats and the app icon.
 '@
 Set-Content -LiteralPath (Join-Path $root 'docs\Artwork.md') -Value $document -Encoding utf8
 Write-Output ($rows -join "`n")

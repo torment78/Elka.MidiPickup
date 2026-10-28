@@ -17,13 +17,26 @@ $artwork = Join-Path $output 'artwork'
 New-Item -ItemType Directory -Path $portable,$artwork -Force | Out-Null
 Copy-Item -LiteralPath $exe -Destination $portable
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $portable
-Copy-Item -LiteralPath (Join-Path $root 'docs') -Destination (Join-Path $portable 'docs') -Recurse
-New-Item -ItemType Directory -Path (Join-Path $portable 'app') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $root 'app\Assets') -Destination (Join-Path $portable 'app\Assets') -Recurse
-New-Item -ItemType Directory -Path (Join-Path $artwork 'docs'),(Join-Path $artwork 'app') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $root 'docs\images') -Destination (Join-Path $artwork 'docs\images') -Recurse
+# Keep release contents limited to the product guides and finished artwork.
+New-Item -ItemType Directory -Path (Join-Path $portable 'docs\releases') -Force | Out-Null
+foreach ($guide in @('Application-MIDI-Control.md','Artwork.md','Compatibility.md','Development.md','Installation.md','Limitations.md','Testing.md')) {
+    Copy-Item -LiteralPath (Join-Path $root "docs\$guide") -Destination (Join-Path $portable 'docs')
+}
+Get-ChildItem -LiteralPath (Join-Path $root 'docs\releases') -File -Filter '*.md' |
+    Where-Object BaseName -match '^\d+\.\d+\.\d+-preview\.\d+$' |
+    Copy-Item -Destination (Join-Path $portable 'docs\releases')
+foreach ($package in @($portable,$artwork)) {
+    New-Item -ItemType Directory -Path (Join-Path $package 'docs\images'),(Join-Path $package 'app\Assets') -Force | Out-Null
+    foreach ($orientation in @('horizontal','vertical')) {
+        foreach ($suffix in @('.png','-under-1mb.jpg')) {
+            Copy-Item -LiteralPath (Join-Path $root "docs\images\midi-pickup-$orientation$suffix") -Destination (Join-Path $package 'docs\images')
+        }
+    }
+    foreach ($asset in @('Elka.MidiPickup.ico','Elka.MidiPickup.png','README.md')) {
+        Copy-Item -LiteralPath (Join-Path $root "app\Assets\$asset") -Destination (Join-Path $package 'app\Assets')
+    }
+}
 Copy-Item -LiteralPath (Join-Path $root 'docs\Artwork.md') -Destination (Join-Path $artwork 'docs\Artwork.md')
-Copy-Item -LiteralPath (Join-Path $root 'app\Assets') -Destination (Join-Path $artwork 'app\Assets') -Recurse
 
 $allowed = @('.exe','.md','.png','.jpg','.ico')
 $unexpected = Get-ChildItem -LiteralPath $portable,$artwork -Recurse -File | Where-Object Extension -notin $allowed

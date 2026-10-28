@@ -23,7 +23,7 @@ Use Visual Studio 2026, the v145 C++ toolset and Windows SDK 10.0.26100.0. The a
 | `tests/PickupTests.cpp` | Hardware-independent regression checks |
 | `tests/ApplicationTests.h` | Application pickup/action/profile checks and isolated Core Audio/controller integration |
 | `src/` | Optional native MIDI compatibility probe |
-| `docs/images/` | Header PNG masters, compressed JPEGs and generation prompts |
+| `docs/images/` | Header PNG masters and compressed JPEGs |
 
 The processing worker has a nominal 10 ms interval. Visible UI refreshes every 100 ms; hidden/minimized windows skip routine redraws. Actual timing depends on Windows scheduling. Each mapping owns independent pickup state.
 
